@@ -41,6 +41,11 @@ def runTrackFindingPythonOnly(
         addDigitization,
     )
 
+    from regressor_models import (
+        MLP,
+        printModelSummary
+    )
+
     s = s or acts.examples.Sequencer(events=1, numThreads=1, logLevel=acts.logging.INFO)
     outputDir = Path(outputDir)
     rnd = acts.examples.RandomNumbers(seed=42)
@@ -129,8 +134,8 @@ def runTrackFindingPythonOnly(
         inputParticleMeasurementsMap="particle_measurements_map",
         inputSimHits="simhits",
         inputMeasurementSimHitsMap="measurement_simhits_map",
-        # outputProtoTracks="truth_particle_tracks",
-        outputProtoTracks="prototracks",
+        # outputProtoTracks="prototracks",
+        outputProtoTracks="truth_particle_tracks",
     )
     s.addAlgorithm(truthTrkFndAlg)
 
@@ -141,21 +146,87 @@ def runTrackFindingPythonOnly(
             self.prototracks = acts.examples.ReadDataHandle(
                 self, acts.examples.ProtoTrackContainer, "Prototracks"
             )
-            self.prototracks.initialize("prototracks")
+            # self.prototracks.initialize("prototracks")
+            self.prototracks.initialize("truth_particle_tracks")
 
             self.tracks = acts.examples.WriteDataHandle(
                 self, acts.examples.ConstTrackContainer, "Tracks"
             )
             self.tracks.initialize("fitted_tracks")
 
+            # NEW
+            self.spacepoints = acts.examples.ReadDataHandle(
+                self, acts.SpacePointContainer2, "Spacepoints"
+            )
+            self.spacepoints.initialize("spacepoints")
+
+            self.max_seq_len = 20
+            
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # self.mlp = MLP(input_dim=max_seq_len*3, output_dim=5, hidden_dim=32, n_hidden_layers=2)
+            self.mlp = MLP(input_dim=self.max_seq_len*3, output_dim=5, hidden_dim=256, n_hidden_layers=7)
+            self.mlp.to(device)
+            self.mlp.load_state_dict(torch.load(mlModelFile, map_location=device))
+
         def execute(self, context):
             prototracks = self.prototracks(context.eventStore)
+            spacepoints = self.spacepoints(context.eventStore)
 
+            # Build a mapping from measurement index to the corresponding
+            # space point produced by SpacePointMaker. Each space point carries
+            # one or more SourceLinks to the original measurement indices.
+            measurement_to_spacepoint = {}
+            for sp in spacepoints:
+                for sl in sp.sourceLinks:
+                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                    measurement_to_spacepoint[isl.index()] = sp
+
+            # LOOK AT THE CODE FOR THIS ONE
             container = acts.examples.TrackContainer()
+            print(prototracks)
             for prototrack in prototracks:
+                ml_input = np.array([[
+                    measurement_to_spacepoint[meas_id].x,
+                    measurement_to_spacepoint[meas_id].y,
+                    measurement_to_spacepoint[meas_id].z,
+                ] for meas_id in prototrack])
+                ml_input = np.flip(ml_input, axis=0)
+                pad_len = self.max_seq_len - len(ml_input)
+                ml_input = np.pad(ml_input, ((0, pad_len), (0, 0)), mode='constant')
+                ml_input = ml_input.flatten()
+                ml_input = torch.tensor(ml_input, dtype=torch.float32)
+                # print(ml_input)
+
+                ml_output = self.mlp(ml_input)
+                ml_output.to(torch.device("cpu"))
+                o = ml_output.detach().numpy()
+                # print(o)
+
                 track = container.makeTrack()
-                track.parameters = acts.BoundVector(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+                track.parameters = acts.BoundVector(o[0], o[1], o[2], o[3], o[4], 1.0)
+                # track.parameters = acts.BoundVector(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
                 track.nMeasurements = len(prototrack)
+
+                # for idx in prototrack:
+                #     if idx not in measurement_to_spacepoint:
+                #         raise RuntimeError(
+                #             f"No space point found for measurement index {idx}")
+
+                #     spacepoint = measurement_to_spacepoint[idx]
+                #     source_link = None
+                #     for sl in spacepoint.sourceLinks:
+                #         isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                #         if isl.index() == idx:
+                #             source_link = sl
+                #             break
+
+                #     if source_link is None:
+                #         raise RuntimeError(
+                #             f"SourceLink for measurement {idx} not found in space point")
+
+                #     track_state = track.appendTrackState()
+                #     track_state.typeFlags().setIsMeasurement()
+                #     track_state.setUncalibratedSourceLink(source_link)
 
             self.tracks(context, container.makeConst())
             return acts.examples.ProcessCode.SUCCESS
