@@ -39,6 +39,55 @@ void addEventData(py::module& mex) {
       .def_property_readonly("hasParameters",
                              &Acts::TrackStateType::hasParameters);
 
+  // Mutable TrackStateProxy for setting values
+  py::class_<TrackStateProxy>(mex, "TrackStateProxy")
+      .def_property_readonly(
+          "typeFlags",
+          [](const TrackStateProxy& self) {
+            return Acts::TrackStateType{self.typeFlags().raw()};
+          })
+      .def_property_readonly("hasPredicted", &TrackStateProxy::hasPredicted)
+      .def_property_readonly("hasFiltered", &TrackStateProxy::hasFiltered)
+      .def_property_readonly("hasSmoothed", &TrackStateProxy::hasSmoothed)
+      .def_property_readonly("predicted",
+                             [](const TrackStateProxy& self) {
+                               return Acts::BoundVector{self.predicted()};
+                             })
+      .def_property_readonly("filtered",
+                             [](const TrackStateProxy& self) {
+                               return Acts::BoundVector{self.filtered()};
+                             })
+      .def_property_readonly("smoothed",
+                             [](const TrackStateProxy& self) {
+                               return Acts::BoundVector{self.smoothed()};
+                             })
+      .def_property_readonly(
+          "predictedCovariance",
+          [](const TrackStateProxy& self) {
+            return Acts::BoundMatrix{self.predictedCovariance()};
+          })
+      .def_property_readonly(
+          "filteredCovariance",
+          [](const TrackStateProxy& self) {
+            return Acts::BoundMatrix{self.filteredCovariance()};
+          })
+      .def_property_readonly(
+          "smoothedCovariance",
+          [](const TrackStateProxy& self) {
+            return Acts::BoundMatrix{self.smoothedCovariance()};
+          })
+      .def_property_readonly("pathLength", &TrackStateProxy::pathLength)
+      .def("setUncalibratedSourceLink",
+           [](TrackStateProxy& self, Acts::SourceLink sourceLink) {
+             self.setUncalibratedSourceLink(std::move(sourceLink));
+           })
+      .def("setReferenceSurface",
+           [](TrackStateProxy& self,
+              std::shared_ptr<const Acts::Surface> surface) {
+             self.setReferenceSurface(std::move(surface));
+           });
+
+  // Const TrackStateProxy (read-only)
   py::class_<ConstTrackStateProxy>(mex, "ConstTrackStateProxy")
       .def_property_readonly(
           "typeFlags",
@@ -246,10 +295,37 @@ void addEventData(py::module& mex) {
   mex.attr("kTrackIndexInvalid") = Acts::kTrackIndexInvalid;
 
   py::class_<IndexSourceLink>(mex, "IndexSourceLink")
+      .def(py::init<Acts::GeometryIdentifier, Index>())
       .def("FromSourceLink",
            [](Acts::SourceLink const& sl) { return sl.get<IndexSourceLink>(); })
       .def("index", &IndexSourceLink::index)
       .def("geometryId", &IndexSourceLink::geometryId);
+
+  // Helper function to get geometry ID from a spacepoint's first source link
+  mex.def("getGeometryIdFromSpacePoint",
+          [](const Acts::SpacePointContainer2& spacepoints,
+             std::uint32_t spacePointIndex) -> Acts::GeometryIdentifier {
+            if (spacePointIndex >= spacepoints.size()) {
+              throw std::out_of_range("SpacePoint index out of range");
+            }
+            auto sp = spacepoints[spacePointIndex];
+            auto sourceLinks = sp.sourceLinks();
+            if (sourceLinks.empty()) {
+              throw std::runtime_error("SpacePoint has no source links");
+            }
+            // Get geometry ID from first source link
+            const auto& isl = sourceLinks[0].get<IndexSourceLink>();
+            return isl.geometryId();
+          },
+          "Get the geometry ID from a spacepoint's first source link");
+
+  // Helper function to create an IndexSourceLink from measurement index
+  mex.def("createIndexSourceLink",
+          [](Acts::GeometryIdentifier geometryId,
+             std::uint32_t measurementIndex) -> Acts::SourceLink {
+            return Acts::SourceLink(IndexSourceLink(geometryId, measurementIndex));
+          },
+          "Create an IndexSourceLink as a SourceLink");
 
   py::class_<TrackProxy>(mex, "TrackProxy")
       .def_property(
@@ -294,7 +370,15 @@ void addEventData(py::module& mex) {
           [](TrackProxy& self, std::uint32_t n) { self.nHoles() = n; })
       .def_property(
           "chi2", [](const TrackProxy& self) -> float { return self.chi2(); },
-          [](TrackProxy& self, float v) { self.chi2() = v; });
+          [](TrackProxy& self, float v) { self.chi2() = v; })
+      .def("appendTrackState",
+           [](TrackProxy& self) { return self.appendTrackState(); },
+           py::keep_alive<0, 1>())
+      .def("appendTrackState",
+           [](TrackProxy& self, Acts::TrackStatePropMask mask) {
+             return self.appendTrackState(mask);
+           },
+           py::keep_alive<0, 1>());
 
   py::class_<TrackContainer>(mex, "TrackContainer")
       .def(py::init([]() {

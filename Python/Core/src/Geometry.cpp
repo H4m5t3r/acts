@@ -228,6 +228,8 @@ void addGeometry(py::module_& m) {
                    self.visitSurfaces(func);
                  })
             .def("geoIdSurfaceMap", &TrackingGeometry::geoIdSurfaceMap)
+            .def("findSurface",
+                 static_cast<const Acts::Surface* (TrackingGeometry::*)(Acts::GeometryIdentifier) const>(&TrackingGeometry::findSurface))
             .def("extractMaterialSurfaces",
                  [](TrackingGeometry& self) {
                    MaterialSurfaceSelector selector;

@@ -195,38 +195,53 @@ def runTrackFindingPythonOnly(
                 ml_input = np.pad(ml_input, ((0, pad_len), (0, 0)), mode='constant')
                 ml_input = ml_input.flatten()
                 ml_input = torch.tensor(ml_input, dtype=torch.float32)
-                # print(ml_input)
+                print(ml_input)
 
                 ml_output = self.mlp(ml_input)
                 ml_output.to(torch.device("cpu"))
                 o = ml_output.detach().numpy()
-                # print(o)
+                print(o)
 
                 track = container.makeTrack()
-                track.parameters = acts.BoundVector(o[0], o[1], o[2], o[3], o[4], 1.0)
+                # Dummy values
                 # track.parameters = acts.BoundVector(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+                # DOES NOT GET PAIRED WITH MEASUREMENTS, NEED TO DO THIS SOMEHOW
+                # track.parameters = acts.BoundVector(o[0], o[1], o[2], o[3], o[4], 1.0)
+                track.parameters = acts.BoundVector(0.0, 0.0, 0.0, 0.0, 0.0, 1.0)  # Dummy but valid
                 track.nMeasurements = len(prototrack)
 
+                # Never attached measurements to the track
+                # PSEUDOCODE
                 # for idx in prototrack:
-                #     if idx not in measurement_to_spacepoint:
-                #         raise RuntimeError(
-                #             f"No space point found for measurement index {idx}")
+                #     sl = createSourceLinkFuction....() # ... = more code
+                #     sf = findSurface....() # ... = more code
+                #     trackState = track.appendTrackState()
+                #     trackState.setUncalibratedSourceLink(sl)
+                #     trackState.setReferenceSurface(sf)
 
-                #     spacepoint = measurement_to_spacepoint[idx]
-                #     source_link = None
-                #     for sl in spacepoint.sourceLinks:
-                #         isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
-                #         if isl.index() == idx:
-                #             source_link = sl
-                #             break
-
-                #     if source_link is None:
-                #         raise RuntimeError(
-                #             f"SourceLink for measurement {idx} not found in space point")
-
-                #     track_state = track.appendTrackState()
-                #     track_state.typeFlags().setIsMeasurement()
-                #     track_state.setUncalibratedSourceLink(source_link)
+                # ✅ NEW: Properly attach measurements and surfaces to track states
+                print(track.parameters)
+                print(track.nMeasurements)
+                for idx in prototrack:
+                    try:
+                        # Step 1: Get the geometry ID from the spacepoint's source link
+                        geom_id = acts.examples.getGeometryIdFromSpacePoint(
+                            spacepoints, idx
+                        )
+                    
+                        # Step 2: Create an IndexSourceLink from geometry ID and measurement index
+                        sl = acts.examples.createIndexSourceLink(geom_id, idx)
+                        # Step 3: Append a new track state to the track
+                        trackState = track.appendTrackState()
+                        # Step 4: Set the uncalibrated source link (measurement reference)
+                        trackState.setUncalibratedSourceLink(sl)
+                        # Step 5: (Optional) Set reference surface if you have access to geometry
+                        sf = trackingGeometry.findSurface(geom_id)
+                        if sf is not None:
+                            trackState.setReferenceSurface(sf)
+                    except Exception as e:
+                        print(f"Warning: Could not attach measurement {idx}: {e}")
+                        continue
 
             self.tracks(context, container.makeConst())
             return acts.examples.ProcessCode.SUCCESS
@@ -297,6 +312,13 @@ if __name__ == "__main__":
     fig, ax = plt.subplots()
     # print(type(histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)))
     perfWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
+    # print(dir(perfWriter.histograms()['trackeff_vs_eta']))
+    # print(perfWriter.histograms()['trackeff_vs_eta'].accepted)
+    # print(dir(perfWriter.histograms()['trackeff_vs_eta'].accepted))
+    # print(perfWriter.histograms()['trackeff_vs_eta'].accepted.values())
+    # print(perfWriter.histograms())
+    # print(perfWriter.histograms())
+    # print(perfWriter.histograms())
     # sys.exit(0)
     # histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
     # plt.show()
