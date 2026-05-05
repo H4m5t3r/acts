@@ -16,6 +16,11 @@ import acts
 import acts.examples
 from acts import UnitConstants as u
 
+import numpy as np
+import torch
+
+import matplotlib.pyplot as plt
+
 
 def runTrackFindingPythonOnly(
     trackingGeometry,
@@ -79,36 +84,55 @@ def runTrackFindingPythonOnly(
         )
     )
 
-    class PythonTrackFinder(acts.examples.IAlgorithm):
-        def __init__(self, name, level):
-            acts.examples.IAlgorithm.__init__(self, name, level)
+    # class PythonTrackFinder(acts.examples.IAlgorithm):
+    #     def __init__(self, name, level):
+    #         acts.examples.IAlgorithm.__init__(self, name, level)
 
-            self.spacepoints = acts.examples.ReadDataHandle(
-                self, acts.SpacePointContainer2, "Spacepoints"
-            )
-            self.spacepoints.initialize("spacepoints")
+    #         self.spacepoints = acts.examples.ReadDataHandle(
+    #             self, acts.SpacePointContainer2, "Spacepoints"
+    #         )
+    #         self.spacepoints.initialize("spacepoints")
 
-            self.prototracks = acts.examples.WriteDataHandle(
-                self, acts.examples.ProtoTrackContainer, "Prototracks"
-            )
-            self.prototracks.initialize("prototracks")
+    #         self.prototracks = acts.examples.WriteDataHandle(
+    #             self, acts.examples.ProtoTrackContainer, "Prototracks"
+    #         )
+    #         self.prototracks.initialize("prototracks")
 
-        def execute(self, context):
-            spacepoints = self.spacepoints(context.eventStore)
+    #     def execute(self, context):
+    #         spacepoints = self.spacepoints(context.eventStore)
 
-            track = acts.examples.ProtoTrack()
-            for sp in sorted(spacepoints, key=lambda sp: sp.r):
-                for sl in sp.sourceLinks:
-                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
-                    track.append(isl.index())
+    #         track = acts.examples.ProtoTrack()
+    #         for sp in sorted(spacepoints, key=lambda sp: sp.r):
+    #             for sl in sp.sourceLinks:
+    #                 isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+    #                 track.append(isl.index())
 
-            prototracks = acts.examples.ProtoTrackContainer()
-            prototracks.append(track)
+    #         prototracks = acts.examples.ProtoTrackContainer()
+    #         prototracks.append(track)
 
-            self.prototracks(context, prototracks)
-            return acts.examples.ProcessCode.SUCCESS
+    #         self.prototracks(context, prototracks)
+    #         return acts.examples.ProcessCode.SUCCESS
 
-    s.addAlgorithm(PythonTrackFinder("PythonTrackFinder", acts.logging.INFO))
+    # s.addAlgorithm(PythonTrackFinder("PythonTrackFinder", acts.logging.INFO))
+
+    trkParamExtractor = acts.examples.ParticleTrackParamExtractor(
+        level=acts.logging.INFO,
+        inputParticles="particles_generated_selected",
+        outputTrackParameters="true_parameters",
+    )
+    s.addAlgorithm(trkParamExtractor)
+
+    truthTrkFndAlg = acts.examples.TruthTrackFinder(
+        level=acts.logging.INFO,
+        inputParticles="particles_generated_selected",
+        inputMeasurements="measurements",
+        inputParticleMeasurementsMap="particle_measurements_map",
+        inputSimHits="simhits",
+        inputMeasurementSimHitsMap="measurement_simhits_map",
+        # outputProtoTracks="truth_particle_tracks",
+        outputProtoTracks="prototracks",
+    )
+    s.addAlgorithm(truthTrkFndAlg)
 
     class PythonTrackFitter(acts.examples.IAlgorithm):
         def __init__(self, name, level):
@@ -165,7 +189,13 @@ def runTrackFindingPythonOnly(
 
 
 if __name__ == "__main__":
-    srcdir = Path(__file__).resolve().parent.parent.parent.parent
+    # srcdir = Path(__file__).resolve().parent.parent.parent.parent
+    # srcdir = Path(__file__).resolve().parent.parent / "Technical_student" / "Program" / "acts"
+    # srcdir = Path(__file__).resolve() / "acts"
+    # srcdir = Path(__file__).resolve().parent
+    srcdir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code")
+    # print(srcdir)
+    # sys.exit(0)
 
     detector = acts.examples.GenericDetector(acts.examples.GenericDetector.Config())
     trackingGeometry = detector.trackingGeometry()
@@ -173,8 +203,11 @@ if __name__ == "__main__":
 
     field = acts.ConstantBField(acts.Vector3(0.0, 0.0, 2.0 * u.T))
 
-    digiConfigFile = srcdir / "Examples/Configs/generic-digi-smearing-config.json"
-    geoSelectionConfigFile = srcdir / "Examples/Configs/generic-seeding-config.json"
+
+
+    digiConfigFile = srcdir / "generic-digi-smearing-config.json"
+    geoSelectionConfigFile = srcdir / "generic-pixel-sstrips-lstrips-spacepoints.json"
+    mlModelFile = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
 
     outputDir = Path.cwd() / "output_track_finding_python_only"
     outputDir.mkdir(exist_ok=True)
@@ -189,7 +222,38 @@ if __name__ == "__main__":
     )
     s.run()
 
-    histograms = perfWriter.histograms()
-    print(
-        f"Retrieved {len(histograms)} performance histograms: {list(histograms.keys())}"
-    )
+    print(perfWriter.histograms().keys())
+    fig, ax = plt.subplots()
+    # print(type(histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)))
+    perfWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
+    # sys.exit(0)
+    # histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
+    # plt.show()
+    # ax.set_xlim(-0.1, 0.1)
+    plt.savefig("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/ml_hist.png")
+    
+
+
+    # histograms = perfWriter.histograms()
+    # print(
+    #     f"Retrieved {len(histograms)} performance histograms: {list(histograms.keys())}"
+    # )
+    # h = histograms["trackeff_vs_DeltaR"]
+    # print(dir(h))
+    # # print(h.accepted)
+    # # print(h.name)
+    # # print(h.plot)
+    # # print(h.rank)
+    # # print(h.title)
+    # print(h.total)
+    # print(h.total)
+
+    # print(h.plot)
+    # print(h.plot())
+
+    # num = h.accepted
+    # den = h.total
+
+    # print(dir(num))
+    # print(num.values)
+    # print(num.values())
