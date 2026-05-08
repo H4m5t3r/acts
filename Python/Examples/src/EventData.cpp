@@ -30,6 +30,8 @@ namespace ActsPython {
 
 void addEventData(py::module& mex) {
   py::class_<Acts::TrackStateType>(mex, "TrackStateTypeFlags")
+      .def_property_readonly("hasMeasurement",
+                             &Acts::TrackStateType::hasMeasurement)
       .def_property_readonly("isMeasurement",
                              &Acts::TrackStateType::isMeasurement)
       .def_property_readonly("isOutlier", &Acts::TrackStateType::isOutlier)
@@ -129,6 +131,28 @@ void addEventData(py::module& mex) {
            [](TrackStateProxy& self, const Acts::SourceLink& sourceLink) {
              self.setUncalibratedSourceLink(Acts::SourceLink{sourceLink});
            })
+      .def("setHasMeasurement",
+           [](TrackStateProxy& self, bool value = true) {
+             self.typeFlags().setHasMeasurement(value);
+           },
+           py::arg("value") = true)
+      .def("setIsMeasurement",
+           [](TrackStateProxy& self) { self.typeFlags().setIsMeasurement(); })
+      .def("setIsOutlier",
+           [](TrackStateProxy& self, bool value = true) {
+             self.typeFlags().setIsOutlier(value);
+           },
+           py::arg("value") = true)
+      .def("setIsHole",
+           [](TrackStateProxy& self, bool value = true) {
+             self.typeFlags().setIsHole(value);
+           },
+           py::arg("value") = true)
+      .def("setIsSharedHit",
+           [](TrackStateProxy& self, bool value = true) {
+             self.typeFlags().setIsSharedHit(value);
+           },
+           py::arg("value") = true)
       .def("allocateCalibrated",
            [](TrackStateProxy& self, std::size_t measdim) {
              self.allocateCalibrated(measdim);

@@ -21,6 +21,10 @@ import torch
 
 import matplotlib.pyplot as plt
 
+from ml_utilities import (
+    DataHandler,
+)
+
 
 def runTrackFindingPythonOnly(
     trackingGeometry,
@@ -176,35 +180,70 @@ def runTrackFindingPythonOnly(
             # space point produced by SpacePointMaker. Each space point carries
             # one or more SourceLinks to the original measurement indices.
             measurement_to_spacepoint = {}
+            measurement_to_sourcelink = {}
             for sp in spacepoints:
                 for sl in sp.sourceLinks:
                     isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
-                    measurement_to_spacepoint[isl.index()] = sp
+                    meas_id = isl.index()
+                    measurement_to_spacepoint[meas_id] = sp
+                    measurement_to_sourcelink[meas_id] = sl
 
             # LOOK AT THE CODE FOR THIS ONE
             container = acts.examples.TrackContainer()
             print(prototracks)
             surface_map = trackingGeometry.geoIdSurfaceMap()
+            print(surface_map)
+
+            tech_acts_dir = "/home/taleiko/Documents/CERN/Technical_Student/Program/acts"
+            train_data_dirs = [os.path.join(tech_acts_dir, "mega_data/mega_data_{}/{}/{}/train_100000".format(str(num), "electron", "geant4")) for num in range(10)]
+
+            dh = DataHandler(
+                train_data_dirs,
+                load_data_scalers=True
+            )
+            input_scaler = dh.getInputScaler()
+            output_scaler = dh.getOutputScaler()
+
             for prototrack in prototracks:
                 ml_input = np.array([[
                     measurement_to_spacepoint[meas_id].x,
                     measurement_to_spacepoint[meas_id].y,
                     measurement_to_spacepoint[meas_id].z,
                 ] for meas_id in prototrack])
-                ml_input = np.flip(ml_input, axis=0)
-                pad_len = self.max_seq_len - len(ml_input)
-                ml_input = np.pad(ml_input, ((0, pad_len), (0, 0)), mode='constant')
-                ml_input = ml_input.flatten()
-                ml_input = torch.tensor(ml_input, dtype=torch.float32)
+
+                fig = plt.figure(figsize=(4,4))
+                ax = fig.add_subplot(111, projection='3d')
+                for coord in ml_input:
+                    ax.scatter(coord[0], coord[1], coord[2])
+                # plt.show()
+                plt.savefig("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/trajectory.png")
+
                 # print(ml_input)
 
-                ml_output = self.mlp(ml_input)
-                ml_output.to(torch.device("cpu"))
-                o = ml_output.detach().numpy()
+                ml_input = np.flip(ml_input, axis=0)
+                # print(ml_input)
+                scaled_input = input_scaler.transform(ml_input)
+                # print(scaled_input)
+                pad_len = self.max_seq_len - len(scaled_input)
+                scaled_input = np.pad(scaled_input, ((0, pad_len), (0, 0)), mode='constant')
+                scaled_input = scaled_input.flatten()
+                # print(scaled_input)
+                scaled_input = torch.tensor(scaled_input, dtype=torch.float32)
+                # print(scaled_input)
+
+                scaled_output = self.mlp(scaled_input)
+                scaled_output.to(torch.device("cpu"))
+                o = scaled_output.detach().numpy()
                 # print(o)
+                o = np.array([o])
+                # print(o)
+                output = output_scaler.inverse_transform(o)
+                # print(output)
+                output = output[0]
+                # print(output)
 
                 track = container.makeTrack()
-                track.parameters = acts.BoundVector(o[0], o[1], o[2], o[3], o[4], 1.0)
+                track.parameters = acts.BoundVector(output[0], output[1], output[2], output[3], output[4], 1.0)
                 track.nMeasurements = len(prototrack)
 
                 # Attach measurements to the track state. Use the original source
@@ -212,15 +251,12 @@ def runTrackFindingPythonOnly(
                 # surface from the geometry map.
                 for meas_id in prototrack:
                     sp = measurement_to_spacepoint[meas_id]
-                    sl = next(
-                        sl for sl in sp.sourceLinks
-                        if acts.examples.IndexSourceLink.FromSourceLink(sl).index()
-                        == meas_id
-                    )
+                    sl = measurement_to_sourcelink[meas_id]
                     isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
                     sf = surface_map[isl.geometryId()]
 
                     trackState = track.appendTrackState()
+                    trackState.setIsMeasurement()
                     trackState.setUncalibratedSourceLink(sl)
                     trackState.setReferenceSurface(sf)
 
@@ -229,9 +265,11 @@ def runTrackFindingPythonOnly(
 
     s.addAlgorithm(PythonTrackFitter("PythonTrackFitter", acts.logging.INFO))
 
+    # SET TO VERBOSE (DEBUG) MODE
     s.addAlgorithm(
         acts.examples.TrackTruthMatcher(
-            level=acts.logging.INFO,
+            # level=acts.logging.INFO,
+            level=acts.logging.VERBOSE,
             inputTracks="fitted_tracks",
             inputParticles="particles",
             inputMeasurementParticlesMap="measurement_particles_map",
@@ -241,6 +279,7 @@ def runTrackFindingPythonOnly(
         )
     )
 
+    # SET TO VERBOSE (DEBUG) MODE
     cfg = acts.examples.PythonTrackFinderPerformanceWriter.Config()
     cfg.inputTracks = "fitted_tracks"
     cfg.inputParticles = "particles"
@@ -248,7 +287,8 @@ def runTrackFindingPythonOnly(
     cfg.inputParticleTrackMatching = "particle_track_matching"
     cfg.inputParticleMeasurementsMap = "particle_measurements_map"
     perfWriter = acts.examples.PythonTrackFinderPerformanceWriter(
-        cfg, acts.logging.INFO
+        # cfg, acts.logging.INFO
+        cfg, acts.logging.VERBOSE
     )
     s.addWriter(perfWriter)
 
