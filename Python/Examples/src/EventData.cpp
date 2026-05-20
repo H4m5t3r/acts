@@ -7,13 +7,16 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #include "Acts/EventData/SpacePointContainer2.hpp"
+#include "ActsExamples/Digitization/MeasurementCreation.hpp"
 #include "ActsExamples/EventData/IndexSourceLink.hpp"
+#include "ActsExamples/EventData/Measurement.hpp"
 #include "ActsExamples/EventData/ProtoTrack.hpp"
 #include "ActsExamples/EventData/Track.hpp"
 #include "ActsPython/Utilities/WhiteBoardRegistry.hpp"
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 // Prevent stl.h's list_caster-based type_caster<std::vector<T>> from matching
@@ -41,12 +44,59 @@ void addEventData(py::module& mex) {
       .def_property_readonly("hasParameters",
                              &Acts::TrackStateType::hasParameters);
 
+  py::class_<Acts::ConstTrackStateTypeMap>(mex, "ConstTrackStateTypeFlags")
+      .def_property_readonly("hasMeasurement",
+                             &Acts::ConstTrackStateTypeMap::hasMeasurement)
+      .def_property_readonly("isMeasurement",
+                             &Acts::ConstTrackStateTypeMap::isMeasurement)
+      .def_property_readonly("isOutlier",
+                             &Acts::ConstTrackStateTypeMap::isOutlier)
+      .def_property_readonly("isHole", &Acts::ConstTrackStateTypeMap::isHole)
+      .def_property_readonly("hasMaterial",
+                             &Acts::ConstTrackStateTypeMap::hasMaterial)
+      .def_property_readonly("isSharedHit",
+                             &Acts::ConstTrackStateTypeMap::isSharedHit)
+      .def_property_readonly("hasParameters",
+                             &Acts::ConstTrackStateTypeMap::hasParameters);
+
+  py::class_<Acts::MutableTrackStateTypeMap>(mex, "MutableTrackStateTypeFlags")
+      .def_property("hasMeasurement",
+                    &Acts::MutableTrackStateTypeMap::hasMeasurement,
+                    [](Acts::MutableTrackStateTypeMap& self, bool value) {
+                      self.setHasMeasurement(value);
+                    })
+      .def_property("isMeasurement",
+                    &Acts::MutableTrackStateTypeMap::isMeasurement,
+                    [](Acts::MutableTrackStateTypeMap& self, bool value) {
+                      if (value) {
+                        self.setIsMeasurement();
+                      } else if (self.isMeasurement()) {
+                        self.setHasMeasurement(false);
+                      }
+                    })
+      .def_property("isOutlier", &Acts::MutableTrackStateTypeMap::isOutlier,
+                    [](Acts::MutableTrackStateTypeMap& self, bool value) {
+                      self.setIsOutlier(value);
+                    })
+      .def_property("isHole", &Acts::MutableTrackStateTypeMap::isHole,
+                    [](Acts::MutableTrackStateTypeMap& self, bool value) {
+                      self.setIsHole(value);
+                    })
+      .def_property_readonly("hasMaterial",
+                             &Acts::MutableTrackStateTypeMap::hasMaterial)
+      .def_property("isSharedHit", &Acts::MutableTrackStateTypeMap::isSharedHit,
+                    [](Acts::MutableTrackStateTypeMap& self, bool value) {
+                      self.setIsSharedHit(value);
+                    })
+      .def_property_readonly("hasParameters",
+                             &Acts::MutableTrackStateTypeMap::hasParameters);
+
   py::class_<ConstTrackStateProxy>(mex, "ConstTrackStateProxy")
       .def_property_readonly(
           "typeFlags",
-          [](const ConstTrackStateProxy& self) {
-            return Acts::TrackStateType{self.typeFlags().raw()};
-          })
+          py::cpp_function(
+              [](const ConstTrackStateProxy& self) { return self.typeFlags(); },
+              py::keep_alive<0, 1>()))
       .def_property_readonly("hasPredicted",
                              &ConstTrackStateProxy::hasPredicted)
       .def_property_readonly("hasFiltered", &ConstTrackStateProxy::hasFiltered)
@@ -81,18 +131,24 @@ void addEventData(py::module& mex) {
       .def_property_readonly("pathLength", &ConstTrackStateProxy::pathLength);
 
   py::class_<TrackStateProxy>(mex, "TrackStateProxy")
-      .def_property_readonly(
-          "typeFlags",
-          [](const TrackStateProxy& self) {
-            return Acts::TrackStateType{self.typeFlags().raw()};
-          })
+      .def_property_readonly("typeFlags", py::cpp_function(
+                                              [](TrackStateProxy& self) {
+                                                return self.typeFlags();
+                                              },
+                                              py::keep_alive<0, 1>()))
       .def_property_readonly("hasPredicted", &TrackStateProxy::hasPredicted)
       .def_property_readonly("hasFiltered", &TrackStateProxy::hasFiltered)
       .def_property_readonly("hasSmoothed", &TrackStateProxy::hasSmoothed)
       .def_property_readonly("hasReferenceSurface",
                              &TrackStateProxy::hasReferenceSurface)
-      .def_property_readonly("referenceSurface",
-                             &TrackStateProxy::referenceSurface)
+      .def_property(
+          "referenceSurface",
+          [](const TrackStateProxy& self) -> const Acts::Surface& {
+            return self.referenceSurface();
+          },
+          [](TrackStateProxy& self, std::shared_ptr<const Acts::Surface> srf) {
+            self.setReferenceSurface(std::move(srf));
+          })
       .def_property_readonly("predicted",
                              [](const TrackStateProxy& self) {
                                return Acts::BoundVector{self.predicted()};
@@ -120,44 +176,18 @@ void addEventData(py::module& mex) {
           [](const TrackStateProxy& self) {
             return Acts::BoundMatrix{self.smoothedCovariance()};
           })
-      .def("setReferenceSurface",
-           [](TrackStateProxy& self,
-              std::shared_ptr<const Acts::Surface> srf) {
-             self.setReferenceSurface(std::move(srf));
-           })
-      .def("getUncalibratedSourceLink",
-           &TrackStateProxy::getUncalibratedSourceLink)
-      .def("setUncalibratedSourceLink",
-           [](TrackStateProxy& self, const Acts::SourceLink& sourceLink) {
-             self.setUncalibratedSourceLink(Acts::SourceLink{sourceLink});
-           })
-      .def("setHasMeasurement",
-           [](TrackStateProxy& self, bool value = true) {
-             self.typeFlags().setHasMeasurement(value);
-           },
-           py::arg("value") = true)
-      .def("setIsMeasurement",
-           [](TrackStateProxy& self) { self.typeFlags().setIsMeasurement(); })
-      .def("setIsOutlier",
-           [](TrackStateProxy& self, bool value = true) {
-             self.typeFlags().setIsOutlier(value);
-           },
-           py::arg("value") = true)
-      .def("setIsHole",
-           [](TrackStateProxy& self, bool value = true) {
-             self.typeFlags().setIsHole(value);
-           },
-           py::arg("value") = true)
-      .def("setIsSharedHit",
-           [](TrackStateProxy& self, bool value = true) {
-             self.typeFlags().setIsSharedHit(value);
-           },
-           py::arg("value") = true)
+      .def_property(
+          "uncalibratedSourceLink", &TrackStateProxy::getUncalibratedSourceLink,
+          [](TrackStateProxy& self, const Acts::SourceLink& sourceLink) {
+            self.setUncalibratedSourceLink(Acts::SourceLink{sourceLink});
+          })
       .def("allocateCalibrated",
            [](TrackStateProxy& self, std::size_t measdim) {
              self.allocateCalibrated(measdim);
            })
-      .def_property_readonly("pathLength", &TrackStateProxy::pathLength);
+      .def_property_readonly("pathLength", [](const TrackStateProxy& self) {
+        return self.pathLength();
+      });
 
   auto constTrackProxy =
       py::class_<ConstTrackProxy>(mex, "ConstTrackProxy")
@@ -376,9 +406,10 @@ void addEventData(py::module& mex) {
       .def_property(
           "chi2", [](const TrackProxy& self) -> float { return self.chi2(); },
           [](TrackProxy& self, float v) { self.chi2() = v; })
-      .def("appendTrackState",
-           [](TrackProxy& self) { return self.appendTrackState(); },
-           py::keep_alive<0, 1>());
+      .def(
+          "appendTrackState",
+          [](TrackProxy& self) { return self.appendTrackState(); },
+          py::keep_alive<0, 1>());
 
   py::class_<TrackContainer>(mex, "TrackContainer")
       .def(py::init([]() {
@@ -394,6 +425,76 @@ void addEventData(py::module& mex) {
             std::make_shared<Acts::ConstVectorMultiTrajectory>(
                 std::move(self.trackStateContainer()))};
       });
+
+  // bind measurements
+  py::class_<ConstVariableBoundMeasurementProxy>(
+      mex, "ConstVariableBoundMeasurementProxy")
+      .def_property_readonly("geometryId",
+                             &ConstVariableBoundMeasurementProxy::geometryId)
+      .def_property_readonly("size", &ConstVariableBoundMeasurementProxy::size)
+      .def_property_readonly("index",
+                             &ConstVariableBoundMeasurementProxy::index)
+      .def_property_readonly(
+          "fullParameters", &ConstVariableBoundMeasurementProxy::fullParameters)
+      .def_property_readonly(
+          "fullCovariance", &ConstVariableBoundMeasurementProxy::fullCovariance)
+      .def_property_readonly(
+          "subspaceIndices",
+          [](const ConstVariableBoundMeasurementProxy& self) {
+            auto indices = self.subspaceHelper().indices();
+            return std::vector<int>(indices.begin(), indices.end());
+          });
+
+  auto measurementContainer =
+      py::classh<MeasurementContainer>(mex, "MeasurementContainer")
+          .def(py::init([]() { return MeasurementContainer(); }))
+          .def("__len__", &MeasurementContainer::size)
+          .def("reserve", &MeasurementContainer::reserve)
+          .def(
+              "emplaceMeasurement",
+              [](MeasurementContainer& self,
+                 Acts::GeometryIdentifier geometryId,
+                 const std::vector<int>& indices,
+                 const std::vector<double>& par, const std::vector<double>& cov)
+                  -> ConstVariableBoundMeasurementProxy {
+                if (indices.size() != par.size() ||
+                    indices.size() != cov.size()) {
+                  throw std::invalid_argument(
+                      "Indices, parameters, and variances must have the same "
+                      "size");
+                }
+
+                std::vector<Acts::BoundIndices> boundIndices;
+                for (auto i : indices) {
+                  if (i < 0 || i >= static_cast<int>(Acts::eBoundSize)) {
+                    throw std::out_of_range("Subspace index out of range");
+                  }
+                  boundIndices.push_back(static_cast<Acts::BoundIndices>(i));
+                }
+
+                // Use existing helpers to convert the input to the measurement
+                DigitizedParameters dParams;
+                dParams.indices = boundIndices;
+                dParams.values = par;
+                dParams.variances = cov;
+                return ConstVariableBoundMeasurementProxy{
+                    createMeasurement(self, geometryId, dParams)};
+              },
+              py::arg("geometryId"), py::arg("indices"), py::arg("parameters"),
+              py::arg("covariance"))
+          .def("__getitem__",
+               [](const MeasurementContainer& self,
+                  MeasurementContainer::Index idx) {
+                 return self.getMeasurement(idx);
+               })
+          .def(
+              "__iter__",
+              [](const MeasurementContainer& self) {
+                return py::make_iterator(self.begin(), self.end());
+              },
+              py::keep_alive<0, 1>());
+
+  WhiteBoardRegistry::registerClass(measurementContainer);
 }
 
 }  // namespace ActsPython
