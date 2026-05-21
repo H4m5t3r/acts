@@ -9,12 +9,14 @@
 
 import os
 from pathlib import Path
+import argparse
 
 os.environ["ACTS_SEQUENCER_DISABLE_FPEMON"] = "1"
 
 import acts
 import acts.examples
 from acts import UnitConstants as u
+from acts.examples.odd import getOpenDataDetector, getOpenDataDetectorDirectory
 
 import numpy as np
 import torch
@@ -25,6 +27,18 @@ from ml_utilities import (
     DataHandler,
 )
 
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--odd",
+    help="Switch use of the ODD on/off",
+    default=False,
+    action=argparse.BooleanOptionalAction,
+)
+parser.add_argument(
+    "--material-config", help="Material map configuration file", type=Path
+)
+args = parser.parse_args()
+
 
 def runTrackFindingPythonOnly(
     trackingGeometry,
@@ -32,6 +46,7 @@ def runTrackFindingPythonOnly(
     digiConfigFile,
     geoSelectionConfigFile,
     outputDir,
+    mlModelFile,
     decorators=[],
     s=None,
 ):
@@ -45,10 +60,7 @@ def runTrackFindingPythonOnly(
         addDigitization,
     )
 
-    from regressor_models import (
-        MLP,
-        printModelSummary
-    )
+    from regressor_models import MLP, printModelSummary
 
     s = s or acts.examples.Sequencer(events=1, numThreads=1, logLevel=acts.logging.INFO)
     outputDir = Path(outputDir)
@@ -165,10 +177,15 @@ def runTrackFindingPythonOnly(
             self.spacepoints.initialize("spacepoints")
 
             self.max_seq_len = 20
-            
+
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             # self.mlp = MLP(input_dim=max_seq_len*3, output_dim=5, hidden_dim=32, n_hidden_layers=2)
-            self.mlp = MLP(input_dim=self.max_seq_len*3, output_dim=5, hidden_dim=256, n_hidden_layers=7)
+            self.mlp = MLP(
+                input_dim=self.max_seq_len * 3,
+                output_dim=5,
+                hidden_dim=256,
+                n_hidden_layers=7,
+            )
             self.mlp.to(device)
             self.mlp.load_state_dict(torch.load(mlModelFile, map_location=device))
 
@@ -176,9 +193,6 @@ def runTrackFindingPythonOnly(
             prototracks = self.prototracks(context.eventStore)
             spacepoints = self.spacepoints(context.eventStore)
 
-            # Build a mapping from measurement index to the corresponding
-            # space point produced by SpacePointMaker. Each space point carries
-            # one or more SourceLinks to the original measurement indices.
             measurement_to_spacepoint = {}
             measurement_to_sourcelink = {}
             for sp in spacepoints:
@@ -187,36 +201,48 @@ def runTrackFindingPythonOnly(
                     meas_id = isl.index()
                     measurement_to_spacepoint[meas_id] = sp
                     measurement_to_sourcelink[meas_id] = sl
+            surface_map = trackingGeometry.geoIdSurfaceMap()
 
-            # LOOK AT THE CODE FOR THIS ONE
             container = acts.examples.TrackContainer()
             print(prototracks)
-            surface_map = trackingGeometry.geoIdSurfaceMap()
-            print(surface_map)
 
-            tech_acts_dir = "/home/taleiko/Documents/CERN/Technical_Student/Program/acts"
-            train_data_dirs = [os.path.join(tech_acts_dir, "mega_data/mega_data_{}/{}/{}/train_100000".format(str(num), "electron", "geant4")) for num in range(10)]
-
-            dh = DataHandler(
-                train_data_dirs,
-                load_data_scalers=True
+            tech_acts_dir = (
+                "/home/taleiko/Documents/CERN/Technical_Student/Program/acts"
             )
+            train_data_dirs = [
+                os.path.join(
+                    tech_acts_dir,
+                    "mega_data/mega_data_{}/{}/{}/train_100000".format(
+                        str(num), "electron", "geant4"
+                    ),
+                )
+                for num in range(10)
+            ]
+
+            dh = DataHandler(train_data_dirs, load_data_scalers=True)
             input_scaler = dh.getInputScaler()
             output_scaler = dh.getOutputScaler()
 
             for prototrack in prototracks:
-                ml_input = np.array([[
-                    measurement_to_spacepoint[meas_id].x,
-                    measurement_to_spacepoint[meas_id].y,
-                    measurement_to_spacepoint[meas_id].z,
-                ] for meas_id in prototrack])
+                ml_input = np.array(
+                    [
+                        [
+                            measurement_to_spacepoint[meas_id].x,
+                            measurement_to_spacepoint[meas_id].y,
+                            measurement_to_spacepoint[meas_id].z,
+                        ]
+                        for meas_id in prototrack
+                    ]
+                )
 
-                fig = plt.figure(figsize=(4,4))
-                ax = fig.add_subplot(111, projection='3d')
+                fig = plt.figure(figsize=(4, 4))
+                ax = fig.add_subplot(111, projection="3d")
                 for coord in ml_input:
                     ax.scatter(coord[0], coord[1], coord[2])
                 # plt.show()
-                plt.savefig("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/trajectory.png")
+                plt.savefig(
+                    "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/trajectory.png"
+                )
 
                 # print(ml_input)
 
@@ -225,7 +251,9 @@ def runTrackFindingPythonOnly(
                 scaled_input = input_scaler.transform(ml_input)
                 # print(scaled_input)
                 pad_len = self.max_seq_len - len(scaled_input)
-                scaled_input = np.pad(scaled_input, ((0, pad_len), (0, 0)), mode='constant')
+                scaled_input = np.pad(
+                    scaled_input, ((0, pad_len), (0, 0)), mode="constant"
+                )
                 scaled_input = scaled_input.flatten()
                 # print(scaled_input)
                 scaled_input = torch.tensor(scaled_input, dtype=torch.float32)
@@ -243,7 +271,9 @@ def runTrackFindingPythonOnly(
                 # print(output)
 
                 track = container.makeTrack()
-                track.parameters = acts.BoundVector(output[0], output[1], output[2], output[3], output[4], 1.0)
+                track.parameters = acts.BoundVector(
+                    output[0], output[1], output[2], output[3], output[4], 1.0
+                )
                 track.nMeasurements = len(prototrack)
 
                 # Attach measurements to the track state. Use the original source
@@ -256,9 +286,9 @@ def runTrackFindingPythonOnly(
                     sf = surface_map[isl.geometryId()]
 
                     trackState = track.appendTrackState()
-                    trackState.setIsMeasurement()
-                    trackState.setUncalibratedSourceLink(sl)
-                    trackState.setReferenceSurface(sf)
+                    trackState.typeFlags.isMeasurement = True
+                    trackState.uncalibratedSourceLink = sl
+                    trackState.referenceSurface = sf
 
             self.tracks(context, container.makeConst())
             return acts.examples.ProcessCode.SUCCESS
@@ -288,7 +318,8 @@ def runTrackFindingPythonOnly(
     cfg.inputParticleMeasurementsMap = "particle_measurements_map"
     perfWriter = acts.examples.PythonTrackFinderPerformanceWriter(
         # cfg, acts.logging.INFO
-        cfg, acts.logging.VERBOSE
+        cfg,
+        acts.logging.VERBOSE,
     )
     s.addWriter(perfWriter)
 
@@ -304,13 +335,23 @@ if __name__ == "__main__":
     # print(srcdir)
     # sys.exit(0)
 
-    detector = acts.examples.GenericDetector(acts.examples.GenericDetector.Config())
+    if args.odd:
+        geoDir = getOpenDataDetectorDirectory()
+        oddMaterialMap = (
+            args.material_config
+            if args.material_config
+            else geoDir / "data/odd-material-maps.root"
+        )
+        oddMaterialDeco = acts.IMaterialDecorator.fromFile(oddMaterialMap)
+        detector = getOpenDataDetector(
+            odd_dir=geoDir, materialDecorator=oddMaterialDeco
+        )
+    else:
+        detector = acts.examples.GenericDetector(acts.examples.GenericDetector.Config())
     trackingGeometry = detector.trackingGeometry()
     decorators = detector.contextDecorators()
 
     field = acts.ConstantBField(acts.Vector3(0.0, 0.0, 2.0 * u.T))
-
-
 
     digiConfigFile = srcdir / "generic-digi-smearing-config.json"
     geoSelectionConfigFile = srcdir / "generic-pixel-sstrips-lstrips-spacepoints.json"
@@ -325,6 +366,7 @@ if __name__ == "__main__":
         digiConfigFile=digiConfigFile,
         geoSelectionConfigFile=geoSelectionConfigFile,
         outputDir=outputDir,
+        mlModelFile=mlModelFile,
         decorators=decorators,
     )
     s.run()
@@ -332,14 +374,14 @@ if __name__ == "__main__":
     print(perfWriter.histograms().keys())
     fig, ax = plt.subplots()
     # print(type(histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)))
-    perfWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
+    perfWriter.histograms()["trackeff_vs_eta"].plot(ax=ax)
     # sys.exit(0)
     # histWriter.histograms()['trackeff_vs_eta'].plot(ax=ax)
     # plt.show()
     # ax.set_xlim(-0.1, 0.1)
-    plt.savefig("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/ml_hist.png")
-    
-
+    plt.savefig(
+        "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/ml_hist.png"
+    )
 
     # histograms = perfWriter.histograms()
     # print(
