@@ -30,8 +30,8 @@ from ml_utilities import (
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--odd",
-    help="Switch use of the ODD on/off",
-    default=False,
+    help="Switch use of the ODD on/off. Stored ROOT data from truth_tracking_gsf_custom.py uses ODD by default.",
+    default=True,
     action=argparse.BooleanOptionalAction,
 )
 parser.add_argument(
@@ -259,13 +259,9 @@ def runTrackFindingPythonOnly(
                 scaled_input = torch.tensor(scaled_input, dtype=torch.float32)
                 # print(scaled_input)
 
-                scaled_output = self.mlp(scaled_input)
-                scaled_output.to(torch.device("cpu"))
-                o = scaled_output.detach().numpy()
-                # print(o)
-                o = np.array([o])
-                # print(o)
-                output = output_scaler.inverse_transform(o)
+                with torch.no_grad():
+                    scaled_output = self.mlp(scaled_input).detach().cpu().numpy()
+                output = output_scaler.inverse_transform(scaled_output)
                 # print(output)
                 output = output[0]
                 # print(output)
@@ -326,12 +322,255 @@ def runTrackFindingPythonOnly(
     return s, perfWriter
 
 
+def runMlPredictionsFromRootData(
+    trackingGeometry,
+    field,
+    digiConfigFile,
+    geoSelectionConfigFile,
+    outputDir,
+    mlModelFile,
+    dataDirs,
+    particleFile=None,
+    simHitsFile=None,
+    scalerDataDirs=None,
+    decorators=[],
+    s=None,
+):
+    from acts.examples.root import RootParticleReader, RootSimHitReader
+    from acts.examples.simulation import (
+        addDigitization,
+        addDigiParticleSelection,
+        ParticleSelectorConfig,
+    )
+    from regressor_models import MLP
+
+    dataDirs = [Path(dataDir) for dataDir in dataDirs]
+    if not dataDirs:
+        raise ValueError(
+            "runMlPredictionsFromRootData requires at least one data directory"
+        )
+
+    if particleFile is None:
+        particleFile = dataDirs[0] / "root" / "particles.root"
+    particleFile = Path(particleFile)
+    if not particleFile.exists():
+        raise FileNotFoundError(
+            f"Could not find particle ROOT file '{particleFile}'. "
+            "Pass particleFile explicitly if your file has another name."
+        )
+
+    if simHitsFile is None:
+        simHitsFile = dataDirs[0] / "hits.root"
+    simHitsFile = Path(simHitsFile)
+    if not simHitsFile.exists():
+        raise FileNotFoundError(
+            f"Could not find sim-hit ROOT file '{simHitsFile}'. "
+            "Pass simHitsFile explicitly if your file has another name."
+        )
+
+    outputDir = Path(outputDir)
+    outputDir.mkdir(exist_ok=True)
+
+    scalerDataDirs = [Path(dataDir) for dataDir in (scalerDataDirs or dataDirs)]
+    # Bottleneck: Data potentially read twice if data scalers are not loaded
+    dataHandler = DataHandler(scalerDataDirs, load_data_scalers=True)
+    mlInputs = dataHandler.readX(dataDirs)
+    outputScaler = dataHandler.getOutputScaler()
+
+    nEvents = len(mlInputs)
+    s = s or acts.examples.Sequencer(
+        events=nEvents, numThreads=1, logLevel=acts.logging.INFO
+    )
+    rnd = acts.examples.RandomNumbers(seed=42)
+
+    for d in decorators:
+        s.addContextDecorator(d)
+
+    s.addReader(
+        RootParticleReader(
+            level=acts.logging.INFO,
+            filePath=str(particleFile.resolve()),
+            outputParticles="particles_generated",
+        )
+    )
+    s.addReader(
+        RootSimHitReader(
+            level=acts.logging.INFO,
+            filePath=str(simHitsFile.resolve()),
+            outputSimHits="simhits",
+        )
+    )
+    s.addWhiteboardAlias("particles_simulated_selected", "particles_generated")
+
+    addDigitization(
+        s,
+        trackingGeometry,
+        field,
+        digiConfigFile=digiConfigFile,
+        rnd=rnd,
+    )
+
+    addDigiParticleSelection(
+        s,
+        ParticleSelectorConfig(
+            pt=(0.9 * u.GeV, None),
+            measurements=(7, None),
+            removeNeutral=True,
+            removeSecondaries=True,
+        ),
+    )
+
+    s.addAlgorithm(
+        acts.examples.SpacePointMaker(
+            level=acts.logging.INFO,
+            trackingGeometry=trackingGeometry,
+            inputMeasurements="measurement_subset",
+            outputSpacePoints="spacepoints",
+            geometrySelection=acts.examples.json.readJsonGeometryList(
+                str(geoSelectionConfigFile)
+            ),
+        )
+    )
+
+    truthTrkFndAlg = acts.examples.TruthTrackFinder(
+        level=acts.logging.INFO,
+        inputParticles="particles_selected",
+        inputMeasurements="measurements",
+        inputParticleMeasurementsMap="particle_measurements_map",
+        inputSimHits="simhits",
+        inputMeasurementSimHitsMap="measurement_simhits_map",
+        outputProtoTracks="truth_particle_tracks",
+    )
+    s.addAlgorithm(truthTrkFndAlg)
+
+    class MlRootTrackFitter(acts.examples.IAlgorithm):
+        def __init__(self, name, level):
+            acts.examples.IAlgorithm.__init__(self, name, level)
+
+            self.prototracks = acts.examples.ReadDataHandle(
+                self, acts.examples.ProtoTrackContainer, "Prototracks"
+            )
+            self.prototracks.initialize("truth_particle_tracks")
+
+            self.spacepoints = acts.examples.ReadDataHandle(
+                self, acts.SpacePointContainer2, "Spacepoints"
+            )
+            self.spacepoints.initialize("spacepoints")
+
+            self.tracks = acts.examples.WriteDataHandle(
+                self, acts.examples.ConstTrackContainer, "Tracks"
+            )
+            self.tracks.initialize("fitted_tracks")
+
+            self.perigeeSurface = acts.Surface.createPerigee(
+                acts.Vector3(0.0, 0.0, 0.0)
+            )
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = device
+            self.mlp = MLP(
+                input_dim=mlInputs.shape[1],
+                output_dim=5,
+                hidden_dim=256,
+                n_hidden_layers=7,
+            )
+            self.mlp.to(device)
+            self.mlp.load_state_dict(torch.load(mlModelFile, map_location=device))
+            self.mlp.eval()
+
+        def execute(self, context):
+            eventNumber = context.eventNumber
+            if eventNumber >= len(mlInputs):
+                raise RuntimeError(
+                    f"No ML input available for event {eventNumber}; "
+                    f"readX() returned {len(mlInputs)} events"
+                )
+
+            prototracks = self.prototracks(context.eventStore)
+            spacepoints = self.spacepoints(context.eventStore)
+
+            measurement_to_sourcelink = {}
+            for sp in spacepoints:
+                for sl in sp.sourceLinks:
+                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                    measurement_to_sourcelink[isl.index()] = sl
+            surface_map = trackingGeometry.geoIdSurfaceMap()
+
+            scaled_input = torch.tensor(
+                mlInputs[eventNumber], dtype=torch.float32, device=self.device
+            ).unsqueeze(0)
+
+            with torch.no_grad():
+                scaled_output = self.mlp(scaled_input).detach().cpu().numpy()
+            output = outputScaler.inverse_transform(scaled_output)[0]
+
+            container = acts.examples.TrackContainer()
+
+            for prototrack in prototracks:
+                track = container.makeTrack()
+                track.referenceSurface = self.perigeeSurface
+                track.parameters = acts.BoundVector(
+                    output[0], output[1], output[2], output[3], output[4], 0.0
+                )
+                track.particleHypothesis = acts.ParticleHypothesis.electron
+                track.chi2 = 0.0
+
+                nMeasurements = 0
+                for meas_id in prototrack:
+                    sl = measurement_to_sourcelink.get(meas_id)
+                    if sl is None:
+                        continue
+
+                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                    sf = surface_map[isl.geometryId()]
+
+                    trackState = track.appendTrackState()
+                    trackState.typeFlags.isMeasurement = True
+                    trackState.uncalibratedSourceLink = sl
+                    trackState.referenceSurface = sf
+                    nMeasurements += 1
+
+                track.nMeasurements = nMeasurements
+
+            self.tracks(context, container.makeConst())
+            return acts.examples.ProcessCode.SUCCESS
+
+    s.addAlgorithm(MlRootTrackFitter("MlRootTrackFitter", acts.logging.INFO))
+
+    s.addAlgorithm(
+        acts.examples.TrackTruthMatcher(
+            level=acts.logging.INFO,
+            inputTracks="fitted_tracks",
+            inputParticles="particles_selected",
+            inputMeasurementParticlesMap="measurement_particles_map",
+            outputTrackParticleMatching="track_particle_matching",
+            outputParticleTrackMatching="particle_track_matching",
+            doubleMatching=True,
+        )
+    )
+
+    cfg = acts.examples.PythonTrackFinderPerformanceWriter.Config()
+    cfg.inputTracks = "fitted_tracks"
+    cfg.inputParticles = "particles_selected"
+    cfg.inputTrackParticleMatching = "track_particle_matching"
+    cfg.inputParticleTrackMatching = "particle_track_matching"
+    cfg.inputParticleMeasurementsMap = "particle_measurements_map"
+    perfWriter = acts.examples.PythonTrackFinderPerformanceWriter(
+        cfg,
+        acts.logging.INFO,
+    )
+    s.addWriter(perfWriter)
+
+    return s, perfWriter
+
+
 if __name__ == "__main__":
     # srcdir = Path(__file__).resolve().parent.parent.parent.parent
     # srcdir = Path(__file__).resolve().parent.parent / "Technical_student" / "Program" / "acts"
     # srcdir = Path(__file__).resolve() / "acts"
     # srcdir = Path(__file__).resolve().parent
-    srcdir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code")
+    actsSrcDir = Path(__file__).resolve().parent.parent.parent.parent
+    phdSrcDir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code")
     # print(srcdir)
     # sys.exit(0)
 
@@ -353,20 +592,46 @@ if __name__ == "__main__":
 
     field = acts.ConstantBField(acts.Vector3(0.0, 0.0, 2.0 * u.T))
 
-    digiConfigFile = srcdir / "generic-digi-smearing-config.json"
-    geoSelectionConfigFile = srcdir / "generic-pixel-sstrips-lstrips-spacepoints.json"
+    if args.odd:
+        digiConfigFile = (
+            getOpenDataDetectorDirectory() / "config/odd-digi-smearing-config.json"
+        )
+        geoSelectionConfigFile = (
+            actsSrcDir / "Examples/Configs/odd-strip-spacepoint-selection.json"
+        )
+    else:
+        digiConfigFile = (
+            actsSrcDir / "Examples/Configs/generic-digi-smearing-config.json"
+        )
+        geoSelectionConfigFile = (
+            phdSrcDir / "generic-pixel-sstrips-lstrips-spacepoints.json"
+        )
     mlModelFile = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
+    # dataDirs = ["/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"]
+    dataDirs = [
+        "/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_1/electron/geant4/train_2"
+    ]
 
     outputDir = Path.cwd() / "output_track_finding_python_only"
     outputDir.mkdir(exist_ok=True)
 
-    s, perfWriter = runTrackFindingPythonOnly(
+    # s, perfWriter = runTrackFindingPythonOnly(
+    #     trackingGeometry=trackingGeometry,
+    #     field=field,
+    #     digiConfigFile=digiConfigFile,
+    #     geoSelectionConfigFile=geoSelectionConfigFile,
+    #     outputDir=outputDir,
+    #     mlModelFile=mlModelFile,
+    #     decorators=decorators,
+    # )
+    s, perfWriter = runMlPredictionsFromRootData(
         trackingGeometry=trackingGeometry,
         field=field,
         digiConfigFile=digiConfigFile,
         geoSelectionConfigFile=geoSelectionConfigFile,
         outputDir=outputDir,
         mlModelFile=mlModelFile,
+        dataDirs=dataDirs,
         decorators=decorators,
     )
     s.run()

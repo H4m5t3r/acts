@@ -11,7 +11,9 @@ import simulation_geometry as sg
 import uproot as ur
 import awkward as ak
 import pandas as pd
+
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 
 class MlDataset(Dataset):
     def __init__(self, X, y):
@@ -23,7 +25,8 @@ class MlDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
-    
+
+
 class EarlyStopping:
     def __init__(self, model_save_path, patience=3000, min_delta=0.0, verbose=True):
         self.patience = patience
@@ -66,14 +69,11 @@ class EarlyStopping:
         """Load the best model state into the given model."""
         model.load_state_dict(self.best_model_state)
 
-class DataHandler():
-    def __init__(
-        self,
-        train_data_dirs:   list,
-        load_data_scalers: bool = False
-    ):
+
+class DataHandler:
+    def __init__(self, train_data_dirs: list, load_data_scalers: bool = False):
         self.outlier_floor = 8
-        # Setting 
+        # Setting
         self.outlier_roof = 20
         print("DataHandler outlier floor: {}".format(self.outlier_floor))
         print("DataHandler outlier roof: {}".format(self.outlier_roof))
@@ -88,7 +88,9 @@ class DataHandler():
                 self.output_scaler = self.loadScaler(output_scaler_path)
                 print("Successfully loaded input and output data scalers.")
             except:
-                print("Couldn't load data scalers. Creating new ones instead and saving them.")
+                print(
+                    "Couldn't load data scalers. Creating new ones instead and saving them."
+                )
                 self.input_scaler = self.createInputScaler()
                 self.output_scaler = self.createParameterOutputScaler()
                 self.saveScaler(self.input_scaler, input_scaler_path)
@@ -96,9 +98,6 @@ class DataHandler():
         else:
             self.input_scaler = self.createInputScaler()
             self.output_scaler = self.createParameterOutputScaler()
-
-        
-
 
     def loadScaler(self, scaler_path):
         return joblib.load(scaler_path)
@@ -112,7 +111,9 @@ class DataHandler():
         print("Reading measurement dfs")
         # m_dfs = dt.createAllMeasurementDfs(data_dirs, no_outliers=True, poca=True)
         m_dfs = [self.createMeasurementDfPOCA(dir) for dir in data_dirs]
-        X_all = np.concatenate([self.preprocessX(measurement_df) for measurement_df in m_dfs])
+        X_all = np.concatenate(
+            [self.preprocessX(measurement_df) for measurement_df in m_dfs]
+        )
         return X_all
 
     def readRootTree(self, file_path, tree_name):
@@ -122,18 +123,22 @@ class DataHandler():
     def createInputOutlierMask(self, measurements_tree):
         event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
         unique_ids, counts = np.unique(event_ids, return_counts=True)
-        valid_event_ids = unique_ids[(counts >= self.outlier_floor) & (counts <= self.outlier_roof)]
+        valid_event_ids = unique_ids[
+            (counts >= self.outlier_floor) & (counts <= self.outlier_roof)
+        ]
         non_outlier_mask = np.isin(event_ids, valid_event_ids)
         n_outlier_filtered = event_ids.shape[0] - np.sum(non_outlier_mask)
         print("Number of sequence length outliers in data fits:", n_outlier_filtered)
         # print("Number of removed measurement rows:", event_ids.shape[0] - np.sum(non_outlier_mask), "out of", event_ids.shape[0])
         return non_outlier_mask
-    
+
     def createSuccessfulParticlePOCAIds(self, data_dir=None, tracksummary_tree=None):
         if data_dir is None and tracksummary_tree is None:
-            raise ValueError("DataHandler.createSuccessfulD0Z0Ids: data_dir or tracksummary_tree must be provided")
+            raise ValueError(
+                "DataHandler.createSuccessfulD0Z0Ids: data_dir or tracksummary_tree must be provided"
+            )
         if tracksummary_tree is None:
-            file_path = os.path.join(data_dir, "tracksummary.root")
+            file_path = os.path.join(data_dir, "tracksummary_gsf.root")
             tracksummary_tree = self.readRootTree(file_path, "tracksummary")
 
         # Event ids
@@ -143,8 +148,17 @@ class DataHandler():
         # fields used downstream (t_d0, t_z0, t_phi, t_theta, t_p, t_charge).
         # Require both true POCA parameters and the filter/GSF fit outputs to be finite
         fields_to_check = [
-            "t_d0", "t_z0", "t_phi", "t_theta", "t_p", "t_charge",
-            "eLOC0_fit", "eLOC1_fit", "ePHI_fit", "eTHETA_fit", "eQOP_fit"
+            "t_d0",
+            "t_z0",
+            "t_phi",
+            "t_theta",
+            "t_p",
+            "t_charge",
+            "eLOC0_fit",
+            "eLOC1_fit",
+            "ePHI_fit",
+            "eTHETA_fit",
+            "eQOP_fit",
         ]
         masks = []
         for field in fields_to_check:
@@ -202,19 +216,34 @@ class DataHandler():
 
         non_outlier_mask = self.createInputOutlierMask(measurements_tree)
         non_nan_mask = self.createNonNanMeasMask(measurements_tree, data_dir)
-        indices = np.array([non_outlier and non_nan for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)])
+        indices = np.array(
+            [
+                non_outlier and non_nan
+                for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)
+            ]
+        )
 
         global_coords = sg.localToGlobalCoordinateConversion(measurements_tree)
-        measurements_df = pd.DataFrame({
-            # NOTE: Changing the event nr column name for consistency
-            "event_id":  ak.to_numpy(measurements_tree["event_nr"].array()[indices]).squeeze(),
-            "volume_id": ak.to_numpy(measurements_tree["volume_id"].array()[indices]).squeeze(),
-            "rec_loc0":  ak.to_numpy(measurements_tree["rec_loc0"].array()[indices]).squeeze(),
-            "rec_loc1":  ak.to_numpy(measurements_tree["rec_loc1"].array()[indices]).squeeze(),
-            "global_x":  global_coords[:,0][indices],
-            "global_y":  global_coords[:,1][indices],
-            "global_z":  global_coords[:,2][indices]
-        })
+        measurements_df = pd.DataFrame(
+            {
+                # NOTE: Changing the event nr column name for consistency
+                "event_id": ak.to_numpy(
+                    measurements_tree["event_nr"].array()[indices]
+                ).squeeze(),
+                "volume_id": ak.to_numpy(
+                    measurements_tree["volume_id"].array()[indices]
+                ).squeeze(),
+                "rec_loc0": ak.to_numpy(
+                    measurements_tree["rec_loc0"].array()[indices]
+                ).squeeze(),
+                "rec_loc1": ak.to_numpy(
+                    measurements_tree["rec_loc1"].array()[indices]
+                ).squeeze(),
+                "global_x": global_coords[:, 0][indices],
+                "global_y": global_coords[:, 1][indices],
+                "global_z": global_coords[:, 2][indices],
+            }
+        )
         # For debugging: comparison with particle_df
         # orig_ids = set(ak.to_numpy(measurements_tree["event_nr"].array()[indices]).squeeze())
         # incl_ids = set(measurements_df.event_id)
@@ -227,22 +256,31 @@ class DataHandler():
         measurements_tree = self.readRootTree(file_path, "measurements")
         event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
         unique_ids, counts = np.unique(event_ids, return_counts=True)
-        valid_event_ids = unique_ids[(counts >= self.outlier_floor) & (counts <= self.outlier_roof)]
+        valid_event_ids = unique_ids[
+            (counts >= self.outlier_floor) & (counts <= self.outlier_roof)
+        ]
         return valid_event_ids
-    
+
     def prepareTrackSummaryDf(self, data_dir):
         file_path = os.path.join(data_dir, "tracksummary.root")
         tracksummary_tree = self.readRootTree(file_path, "tracksummary")
 
         event_id_array = ak.to_numpy(tracksummary_tree["event_nr"].array()).squeeze()
         non_outlier_event_ids = set(self.findNonOutlierEventIds(data_dir))
-        non_outlier_mask = np.array([x in non_outlier_event_ids for x in event_id_array])
+        non_outlier_mask = np.array(
+            [x in non_outlier_event_ids for x in event_id_array]
+        )
 
         successful_train_d0_z0_ids = self.createSuccessfulParticlePOCAIds(data_dir)
         id_set = set(successful_train_d0_z0_ids)
         non_nan_mask = np.array([x in id_set for x in event_id_array])
 
-        combined_filter = np.array([non_outlier and non_nan for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)])
+        combined_filter = np.array(
+            [
+                non_outlier and non_nan
+                for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)
+            ]
+        )
 
         # print("SEQUENCE OUTLIERS:")
         # print(len(non_outlier_mask))
@@ -259,17 +297,31 @@ class DataHandler():
 
     def createPOCAParameterDf(self, data_dir):
         tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        t_q = ak.to_numpy(tracksummary_tree["t_charge"].array()[combined_filter]).squeeze()
+        t_q = ak.to_numpy(
+            tracksummary_tree["t_charge"].array()[combined_filter]
+        ).squeeze()
         t_p = ak.to_numpy(tracksummary_tree["t_p"].array()[combined_filter]).squeeze()
-        tracksummary_df = pd.DataFrame({
-            "event_id": ak.to_numpy(tracksummary_tree["event_nr"].array()[combined_filter]).squeeze(),
-            # TODO: These are not the vertex coordinates, right?
-            "d0":       ak.to_numpy(tracksummary_tree["t_d0"].array()[combined_filter]).squeeze(),
-            "z0":       ak.to_numpy(tracksummary_tree["t_z0"].array()[combined_filter]).squeeze(),
-            "phi":      ak.to_numpy(tracksummary_tree["t_phi"].array()[combined_filter]).squeeze(),
-            "theta":    ak.to_numpy(tracksummary_tree["t_theta"].array()[combined_filter]).squeeze(),
-            "q_over_p": t_q / t_p,
-        })
+        tracksummary_df = pd.DataFrame(
+            {
+                "event_id": ak.to_numpy(
+                    tracksummary_tree["event_nr"].array()[combined_filter]
+                ).squeeze(),
+                # TODO: These are not the vertex coordinates, right?
+                "d0": ak.to_numpy(
+                    tracksummary_tree["t_d0"].array()[combined_filter]
+                ).squeeze(),
+                "z0": ak.to_numpy(
+                    tracksummary_tree["t_z0"].array()[combined_filter]
+                ).squeeze(),
+                "phi": ak.to_numpy(
+                    tracksummary_tree["t_phi"].array()[combined_filter]
+                ).squeeze(),
+                "theta": ak.to_numpy(
+                    tracksummary_tree["t_theta"].array()[combined_filter]
+                ).squeeze(),
+                "q_over_p": t_q / t_p,
+            }
+        )
         # For debugging: comparison with measurement_df
         # orig_ids = set(ak.to_numpy(tracksummary_tree["event_nr"].array()).squeeze())
         # incl_ids = set(tracksummary_df["event_id"])
@@ -282,31 +334,59 @@ class DataHandler():
         # n_before = len(tracksummary_df)
         # tracksummary_df = tracksummary_df.dropna(subset=self.poca_columns)
         # n_after = len(tracksummary_df)
-        
+
         return tracksummary_df
 
     def createFilterTrackSummaryDf(self, data_dir):
         tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        tracksummary_df = pd.DataFrame({
-            "event_id":     ak.to_numpy(tracksummary_tree["event_nr"].array())[combined_filter],
-            "est_d0":       ak.to_numpy(tracksummary_tree["eLOC0_fit"].array()[combined_filter]).squeeze(),
-            "est_z0":       ak.to_numpy(tracksummary_tree["eLOC1_fit"].array()[combined_filter]).squeeze(),
-            "est_phi":      ak.to_numpy(tracksummary_tree["ePHI_fit"].array()[combined_filter]).squeeze(),
-            "est_theta":    ak.to_numpy(tracksummary_tree["eTHETA_fit"].array()[combined_filter]).squeeze(),
-            "est_q_over_p": ak.to_numpy(tracksummary_tree["eQOP_fit"].array()[combined_filter]).squeeze(),
-        })
+        tracksummary_df = pd.DataFrame(
+            {
+                "event_id": ak.to_numpy(tracksummary_tree["event_nr"].array())[
+                    combined_filter
+                ],
+                "est_d0": ak.to_numpy(
+                    tracksummary_tree["eLOC0_fit"].array()[combined_filter]
+                ).squeeze(),
+                "est_z0": ak.to_numpy(
+                    tracksummary_tree["eLOC1_fit"].array()[combined_filter]
+                ).squeeze(),
+                "est_phi": ak.to_numpy(
+                    tracksummary_tree["ePHI_fit"].array()[combined_filter]
+                ).squeeze(),
+                "est_theta": ak.to_numpy(
+                    tracksummary_tree["eTHETA_fit"].array()[combined_filter]
+                ).squeeze(),
+                "est_q_over_p": ak.to_numpy(
+                    tracksummary_tree["eQOP_fit"].array()[combined_filter]
+                ).squeeze(),
+            }
+        )
         return tracksummary_df
 
     def createFilterResidualDf(self, data_dir):
         tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        tracksummary_df = pd.DataFrame({
-            "event_id":         ak.to_numpy(tracksummary_tree["event_nr"].array())[combined_filter],
-            "res_gsf_d0":       ak.to_numpy(tracksummary_tree["res_eLOC0_fit"].array()[combined_filter]).squeeze(),
-            "res_gsf_z0":       ak.to_numpy(tracksummary_tree["res_eLOC1_fit"].array()[combined_filter]).squeeze(),
-            "res_gsf_phi":      ak.to_numpy(tracksummary_tree["res_ePHI_fit"].array()[combined_filter]).squeeze(),
-            "res_gsf_theta":    ak.to_numpy(tracksummary_tree["res_eTHETA_fit"].array()[combined_filter]).squeeze(),
-            "res_gsf_q_over_p": ak.to_numpy(tracksummary_tree["res_eQOP_fit"].array()[combined_filter]).squeeze(),
-        })
+        tracksummary_df = pd.DataFrame(
+            {
+                "event_id": ak.to_numpy(tracksummary_tree["event_nr"].array())[
+                    combined_filter
+                ],
+                "res_gsf_d0": ak.to_numpy(
+                    tracksummary_tree["res_eLOC0_fit"].array()[combined_filter]
+                ).squeeze(),
+                "res_gsf_z0": ak.to_numpy(
+                    tracksummary_tree["res_eLOC1_fit"].array()[combined_filter]
+                ).squeeze(),
+                "res_gsf_phi": ak.to_numpy(
+                    tracksummary_tree["res_ePHI_fit"].array()[combined_filter]
+                ).squeeze(),
+                "res_gsf_theta": ak.to_numpy(
+                    tracksummary_tree["res_eTHETA_fit"].array()[combined_filter]
+                ).squeeze(),
+                "res_gsf_q_over_p": ak.to_numpy(
+                    tracksummary_tree["res_eQOP_fit"].array()[combined_filter]
+                ).squeeze(),
+            }
+        )
         return tracksummary_df
 
     def readY(self, data_dirs=None):
@@ -320,7 +400,9 @@ class DataHandler():
 
     def preprocessX(self, measurement_df):
         print("Preprocessing started")
-        measurement_df = measurement_df[["event_id", "global_x", "global_y", "global_z"]]
+        measurement_df = measurement_df[
+            ["event_id", "global_x", "global_y", "global_z"]
+        ]
         input_columns_to_normalize = ["global_x", "global_y", "global_z"]
         # measurement_df.loc[:, input_columns_to_normalize] = self.input_scaler.transform(
         #     measurement_df[input_columns_to_normalize]
@@ -330,7 +412,12 @@ class DataHandler():
         meas_df_scaled = measurement_df.copy()
         meas_df_scaled[input_columns_to_normalize] = coords_scaled
         grouped = meas_df_scaled.groupby("event_id")
-        X = np.stack([self.processXInward(group, self.outlier_roof) for event_id, group in grouped])
+        X = np.stack(
+            [
+                self.processXInward(group, self.outlier_roof)
+                for event_id, group in grouped
+            ]
+        )
         return X
 
     def processXInward(self, group, max_seq_len):
@@ -339,7 +426,7 @@ class DataHandler():
         coords = np.flip(coords, axis=0)
         pad_len = max_seq_len - len(coords)
         # Add zeroes after the data
-        coords = np.pad(coords, ((0, pad_len), (0, 0)), mode='constant')
+        coords = np.pad(coords, ((0, pad_len), (0, 0)), mode="constant")
         coords = coords.flatten()
         return coords
 
@@ -347,7 +434,6 @@ class DataHandler():
         y = particle_df[self.poca_columns]
         y = self.output_scaler.transform(y)
         return y
-
 
     def createInputScaler(self):
         print("Creating input scaler")
@@ -364,25 +450,27 @@ class DataHandler():
         print("Creating POCA output scaler")
         output_columns_to_normalize = self.poca_columns
         output_scaler = StandardScaler()
-        for particle_df in [self.createPOCAParameterDf(data_dir) for data_dir in self.train_data_dirs]:
+        for particle_df in [
+            self.createPOCAParameterDf(data_dir) for data_dir in self.train_data_dirs
+        ]:
             output_scaler.partial_fit(particle_df[output_columns_to_normalize])
         print("Columns used for output scaling:", output_columns_to_normalize)
         return output_scaler
-    
+
     def getInputScaler(self):
         return self.input_scaler
-    
+
     def getOutputScaler(self):
         return self.output_scaler
 
 
-class Evaluator():
+class Evaluator:
     def __init__(
         self,
-        max_seq_len:   int,
-        input_scaler:  StandardScaler,
+        max_seq_len: int,
+        input_scaler: StandardScaler,
         output_scaler: StandardScaler,
-        data_handler:  DataHandler,
+        data_handler: DataHandler,
     ):
         self.max_seq_len = max_seq_len
         self.input_scaler = input_scaler
@@ -394,14 +482,15 @@ class Evaluator():
         # self.labels = ["mm", "mm", "rad", "rad", "1/(GeV/c)"]
         self.labels = ["mm", "mm", "rad", "rad", r"$\text{GeV}^{-1}$"]
 
-
     ##################################################
     # Distribution plotting
     ##################################################
     def plotDistributions(self, data_dir, model, is_transformer, distr_base_path):
         # self.plotTruthDistributions(data_dir, distr_base_path)
         # self.plotGsfDistributions(data_dir, distr_base_path)
-        self.plotModelOutputDistributions(model, data_dir, is_transformer, distr_base_path)
+        self.plotModelOutputDistributions(
+            model, data_dir, is_transformer, distr_base_path
+        )
 
     def plotTruthDistributions(self, data_dir, distr_base_path):
         poca_df = self.data_handler.createPOCAParameterDf(data_dir)
@@ -417,10 +506,10 @@ class Evaluator():
         axes = [ax1, ax2, ax3, ax4, ax5]
         for i in range(len(self.titles)):
             data = poca_df[self.poca_columns[i]].to_numpy()
-            axes[i].hist(data, bins=50, color='skyblue', edgecolor='black')
+            axes[i].hist(data, bins=50, color="skyblue", edgecolor="black")
             axes[i].set_title(self.titles[i])
             axes[i].set_xlabel(self.labels[i])
-            axes[i].set_ylabel('Frequency')
+            axes[i].set_ylabel("Frequency")
             if i == 0:
                 axes[i].set_xlim([-0.07, 0.07])
             axes[i].grid(True)
@@ -442,16 +531,16 @@ class Evaluator():
         axes = [ax1, ax2, ax3, ax4, ax5]
         for i in range(1, len(self.titles)):
             data = filter_df[self.gsf_columns[i]].to_numpy()
-            axes[i].hist(data, bins=50, color='skyblue', edgecolor='black')
+            axes[i].hist(data, bins=50, color="skyblue", edgecolor="black")
             axes[i].set_title(self.titles[i])
             axes[i].set_xlabel(self.labels[i])
-            axes[i].set_ylabel('Frequency')
+            axes[i].set_ylabel("Frequency")
             axes[i].grid(True)
         data = filter_df[self.gsf_columns[0]].to_numpy()
-        axes[0].hist(data, bins=5000, color='skyblue', edgecolor='black')
+        axes[0].hist(data, bins=5000, color="skyblue", edgecolor="black")
         axes[0].set_title(self.titles[0])
         axes[0].set_xlabel([self.labels[0]])
-        axes[0].set_ylabel('Frequency')
+        axes[0].set_ylabel("Frequency")
         axes[0].grid(True)
         axes[0].set_xlim([-0.5, 0.5])
         fig.suptitle("GSF output distributions")
@@ -459,13 +548,11 @@ class Evaluator():
         plt.savefig(distr_base_path + "_GSF_distr.png")
         plt.show()
 
-    def plotModelOutputDistributions(self, model, test_data_dir, is_transformer, distr_base_path):
+    def plotModelOutputDistributions(
+        self, model, test_data_dir, is_transformer, distr_base_path
+    ):
         evaluation_dataset = self.createTestDataset(test_data_dir)
-        preds = self.makePredictions(
-            model,
-            evaluation_dataset,
-            is_transformer
-        )
+        preds = self.makePredictions(model, evaluation_dataset, is_transformer)
         # fig, axes = plt.subplots(nrows=1, ncols=5, figsize=(5 * 5, 4))
         fig = plt.figure(figsize=(12, 7))
         gs = GridSpec(2, 6, figure=fig)
@@ -478,10 +565,12 @@ class Evaluator():
         for i in range(len(self.titles)):
             # axes[i].hist(preds[:, i], bins=50, color='skyblue', edgecolor='black')
             # axes[i].hist(preds[:, i], bins=50, color='cornflowerblue', edgecolor='black', alpha=1.0)
-            axes[i].hist(preds[:, i], bins=50, color='darkorange', edgecolor='black', alpha=1.0)
+            axes[i].hist(
+                preds[:, i], bins=50, color="darkorange", edgecolor="black", alpha=1.0
+            )
             axes[i].set_title(self.titles[i])
             axes[i].set_xlabel(self.labels[i])
-            axes[i].set_ylabel('Frequency')
+            axes[i].set_ylabel("Frequency")
             axes[i].grid(True)
             # axes[i].set_xlim(-0.1, 0.1)
         fig.suptitle("Model output distributions")
@@ -505,11 +594,7 @@ class Evaluator():
     # Model residuals
     ##################################################
     def evaluatePOCAParameterResiduals(
-        self,
-        model,
-        test_data_dir,
-        is_transformer,
-        res_fig_path
+        self, model, test_data_dir, is_transformer, res_fig_path
     ):
         # print("Reading inputs")
         # test_measurements_df = self.data_handler.createMeasurementDfPOCA(test_data_dir)
@@ -530,7 +615,7 @@ class Evaluator():
             r"$z_0^{\text{true}}-z_0^{\text{fit}}$ [mm]",
             r"$\phi^{\text{true}}-\phi^{\text{fit}}$ [rad]",
             r"$\theta^{\text{true}}-\theta^{\text{fit}}$ [rad]",
-            r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]"
+            r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]",
         ]
         print(labels)
         print("Making histograms")
@@ -538,7 +623,15 @@ class Evaluator():
             res_fig_title = "Residuals with the transformer model"
         else:
             res_fig_title = "Residuals with the MLP model"
-        self.residualHistogram1Row(output_dim, residuals, variable_names, is_transformer, labels, res_fig_path, res_fig_title)
+        self.residualHistogram1Row(
+            output_dim,
+            residuals,
+            variable_names,
+            is_transformer,
+            labels,
+            res_fig_path,
+            res_fig_title,
+        )
 
     def residualHistogram1Row(
         self,
@@ -549,7 +642,7 @@ class Evaluator():
         labels,
         res_fig_path,
         res_fig_title=None,
-        res_distr_bins=50
+        res_distr_bins=50,
     ):
         # fig, axes = plt.subplots(nrows=1, ncols=n_residuals, figsize=(5 * n_residuals, 4))
         fig = plt.figure(figsize=(10, 6))
@@ -573,7 +666,13 @@ class Evaluator():
         # MLP RANGES
         else:
             # ranges = [[-0.005, 0.005], [-23, 23], [-0.35, 0.35], [-0.25, 0.25], [-0.03, 0.03]]
-            ranges = [[-0.002, 0.002], [-25, 25], [-0.4, 0.4], [-0.2, 0.2], [-0.03, 0.03]]
+            ranges = [
+                [-0.002, 0.002],
+                [-25, 25],
+                [-0.4, 0.4],
+                [-0.2, 0.2],
+                [-0.03, 0.03],
+            ]
             # ranges = [[-0.02, 0.02], [-25, 25], [-0.4, 0.4], [-0.2, 0.2], [-0.03, 0.03]]
             # bins = [100, 70, 50, 50, 75]
             # bins = [100, 70, 50, 50, 75]
@@ -581,11 +680,13 @@ class Evaluator():
             ml_color = "cornflowerblue"
         for i in range(n_residuals):
             # axes[i].hist(residuals[:, i], bins=bins[i], color='skyblue', edgecolor='black')
-            axes[i].hist(residuals[:, i], bins=bins[i], color=ml_color, edgecolor='black')
+            axes[i].hist(
+                residuals[:, i], bins=bins[i], color=ml_color, edgecolor="black"
+            )
             # axes[i].set_title(f'Residuals for {variable_names[i]}')
-            axes[i].set_title(f'{variable_names[i]}')
+            axes[i].set_title(f"{variable_names[i]}")
             axes[i].set_xlabel(f"{labels[i]}")
-            axes[i].set_ylabel('Frequency')
+            axes[i].set_ylabel("Frequency")
             axes[i].set_xlim(ranges[i])
             axes[i].grid(True)
             # axes[i].set_xlim(-0.1, 0.1)
@@ -599,10 +700,7 @@ class Evaluator():
 
     def residualCalculations(self, model, evaluation_dataset, is_transformer):
         preds, targets = self.makePredictions(
-            model,
-            evaluation_dataset,
-            is_transformer,
-            return_targets=True
+            model, evaluation_dataset, is_transformer, return_targets=True
         )
         print(preds[:5])
         print(targets[:5])
@@ -610,11 +708,7 @@ class Evaluator():
         return residuals
 
     def makeTransformerResidualPredictions(
-        self,
-        transformer_model,
-        X_batch,
-        y_batch,
-        device
+        self, transformer_model, X_batch, y_batch, device
     ):
         X_batch = X_batch.reshape(y_batch.shape[0], self.max_seq_len, 3)
         mask = (X_batch == 0).all(dim=2)
@@ -628,11 +722,13 @@ class Evaluator():
         X_batch = X_batch.to(device)
         preds = mlp_model(X_batch)
         return preds
-    
+
     ##################################################
     # Correlation
     ##################################################
-    def residualCorrelationHeatmaps(self, model, test_data_dir, is_transformer, fig_dir):
+    def residualCorrelationHeatmaps(
+        self, model, test_data_dir, is_transformer, fig_dir
+    ):
         test_measurements_df = self.data_handler.createMeasurementDfPOCA(test_data_dir)
         test_particles_df = self.data_handler.createPOCAParameterDf(test_data_dir)
         X_test = self.data_handler.preprocessX(test_measurements_df)
@@ -640,23 +736,23 @@ class Evaluator():
         test_dataset = MlDataset(X_test, y_test)
         predictions = self.makePredictions(model, test_dataset, is_transformer)
 
-        pred_d0 = predictions[:,0]
-        pred_z0 = predictions[:,1]
-        pred_phi = predictions[:,2]
-        pred_theta = predictions[:,3]
-        pred_q_over_p = predictions[:,4]
+        pred_d0 = predictions[:, 0]
+        pred_z0 = predictions[:, 1]
+        pred_phi = predictions[:, 2]
+        pred_theta = predictions[:, 3]
+        pred_q_over_p = predictions[:, 4]
 
-        d0_truth =       test_particles_df["d0"].to_numpy()
-        z0_truth =       test_particles_df["z0"].to_numpy()
-        phi_truth =      test_particles_df["phi"].to_numpy()
-        theta_truth =    test_particles_df["theta"].to_numpy()
+        d0_truth = test_particles_df["d0"].to_numpy()
+        z0_truth = test_particles_df["z0"].to_numpy()
+        phi_truth = test_particles_df["phi"].to_numpy()
+        theta_truth = test_particles_df["theta"].to_numpy()
         q_over_p_truth = test_particles_df["q_over_p"].to_numpy()
-        
+
         filter_df = self.data_handler.createFilterTrackSummaryDf(test_data_dir)
-        d0_filter =       filter_df["est_d0"].to_numpy()
-        z0_filter =       filter_df["est_z0"].to_numpy()
-        phi_filter =      filter_df["est_phi"].to_numpy()
-        theta_filter =    filter_df["est_theta"].to_numpy()
+        d0_filter = filter_df["est_d0"].to_numpy()
+        z0_filter = filter_df["est_z0"].to_numpy()
+        phi_filter = filter_df["est_phi"].to_numpy()
+        theta_filter = filter_df["est_theta"].to_numpy()
         q_over_p_filter = filter_df["est_q_over_p"].to_numpy()
 
         residuals_ml = {
@@ -664,14 +760,14 @@ class Evaluator():
             "z₀": z0_truth - pred_z0,
             "φ": phi_truth - pred_phi,
             "θ": theta_truth - pred_theta,
-            "q/p": q_over_p_truth - pred_q_over_p
+            "q/p": q_over_p_truth - pred_q_over_p,
         }
         residuals_filter = {
             "d₀": d0_truth - d0_filter,
             "z₀": z0_truth - z0_filter,
             "φ": phi_truth - phi_filter,
             "θ": theta_truth - theta_filter,
-            "q/p": q_over_p_truth - q_over_p_filter
+            "q/p": q_over_p_truth - q_over_p_filter,
         }
         self.correlationHeatmap(residuals_filter, "GSF", fig_dir)
         self.correlationHeatmap(residuals_ml, "Transformer", fig_dir)
@@ -694,18 +790,11 @@ class Evaluator():
         plt.savefig("".join([fig_dir, "/", vis_name, ".png"]))
         plt.show()
 
-
-
     ##################################################
     # Model vs. GSF
     ##################################################
     def pocaModelToGSFComparison(
-        self,
-        model,
-        test_data_dir,
-        is_transformer,
-        figures_dir,
-        file_name_ending
+        self, model, test_data_dir, is_transformer, figures_dir, file_name_ending
     ):
         test_measurements_df = self.data_handler.createMeasurementDfPOCA(test_data_dir)
         test_particles_df = self.data_handler.createPOCAParameterDf(test_data_dir)
@@ -714,23 +803,23 @@ class Evaluator():
         test_dataset = MlDataset(X_test, y_test)
         predictions = self.makePredictions(model, test_dataset, is_transformer)
 
-        pred_d0 = predictions[:,0]
-        pred_z0 = predictions[:,1]
-        pred_phi = predictions[:,2]
-        pred_theta = predictions[:,3]
-        pred_q_over_p = predictions[:,4]
+        pred_d0 = predictions[:, 0]
+        pred_z0 = predictions[:, 1]
+        pred_phi = predictions[:, 2]
+        pred_theta = predictions[:, 3]
+        pred_q_over_p = predictions[:, 4]
 
-        d0_truth =       test_particles_df["d0"].to_numpy()
-        z0_truth =       test_particles_df["z0"].to_numpy()
-        phi_truth =      test_particles_df["phi"].to_numpy()
-        theta_truth =    test_particles_df["theta"].to_numpy()
+        d0_truth = test_particles_df["d0"].to_numpy()
+        z0_truth = test_particles_df["z0"].to_numpy()
+        phi_truth = test_particles_df["phi"].to_numpy()
+        theta_truth = test_particles_df["theta"].to_numpy()
         q_over_p_truth = test_particles_df["q_over_p"].to_numpy()
-        
+
         filter_df = self.data_handler.createFilterTrackSummaryDf(test_data_dir)
-        d0_filter =       filter_df["est_d0"].to_numpy()
-        z0_filter =       filter_df["est_z0"].to_numpy()
-        phi_filter =      filter_df["est_phi"].to_numpy()
-        theta_filter =    filter_df["est_theta"].to_numpy()
+        d0_filter = filter_df["est_d0"].to_numpy()
+        z0_filter = filter_df["est_z0"].to_numpy()
+        phi_filter = filter_df["est_phi"].to_numpy()
+        theta_filter = filter_df["est_theta"].to_numpy()
         q_over_p_filter = filter_df["est_q_over_p"].to_numpy()
 
         residuals_ml = {
@@ -738,21 +827,21 @@ class Evaluator():
             "z₀": z0_truth - pred_z0,
             "φ": phi_truth - pred_phi,
             "θ": theta_truth - pred_theta,
-            "q/p": q_over_p_truth - pred_q_over_p
+            "q/p": q_over_p_truth - pred_q_over_p,
         }
         residuals_filter = {
             "d₀": d0_truth - d0_filter,
             "z₀": z0_truth - z0_filter,
             "φ": phi_truth - phi_filter,
             "θ": theta_truth - theta_filter,
-            "q/p": q_over_p_truth - q_over_p_filter
+            "q/p": q_over_p_truth - q_over_p_filter,
         }
         self.mlVsModelPlotting(
             residuals_ml,
             residuals_filter,
             is_transformer,
             figures_dir,
-            file_name_ending
+            file_name_ending,
         )
 
     def mlVsModelPlotting(
@@ -761,18 +850,30 @@ class Evaluator():
         residuals_filter,
         is_transformer,
         figures_dir,
-        file_name_ending
+        file_name_ending,
     ):
         # plt.figure(figsize=(15, 10))
         alpha = 0.6
         units = np.array(["mm", "mm", "radians", "radians", "C / (GeV c⁻¹)"])
 
         if is_transformer:
-            ranges = [[-0.06, 0.06], [-10, 10], [-0.175, 0.175], [-0.1, 0.1], [-0.03, 0.03]]
+            ranges = [
+                [-0.06, 0.06],
+                [-10, 10],
+                [-0.175, 0.175],
+                [-0.1, 0.1],
+                [-0.03, 0.03],
+            ]
             n_bins_list = [70000, 300, 1200, 80, 3000]
             # ranges = [[-2.5, 2.5], [-5, 5], [-0.025, 0.025], [-0.0025, 0.0025], [-0.2, 0.2]]
         else:
-            ranges = [[-0.05, 0.05], [-6, 6], [-0.175, 0.175], [-0.08, 0.08], [-0.03, 0.03]]
+            ranges = [
+                [-0.05, 0.05],
+                [-6, 6],
+                [-0.175, 0.175],
+                [-0.08, 0.08],
+                [-0.03, 0.03],
+            ]
             # n_bins_list = [70000, 500, 1200, 80, 3000]
             n_bins_list = [110000, 800, 1200, 120, 3000]
         # fig = plt.figure(figsize=(10, 6))
@@ -788,7 +889,7 @@ class Evaluator():
             # plt.subplot(2, 3, i)  # 2 rows × 3 columns grid
 
             # Combined bins calculation for combined image
-            n_bins = n_bins_list[i-1]
+            n_bins = n_bins_list[i - 1]
             combined = np.hstack((residuals_ml[key], residuals_filter[key]))
             min_val, max_val = np.nanmin(combined), np.nanmax(combined)
             # bins = 200  # adjust as needed
@@ -807,18 +908,34 @@ class Evaluator():
             else:
                 c = "royalblue"
                 l = "MLP"
-            
-            ax = axes[i-1]
-            ax.hist(residuals_ml[key], bins=bins, color=c, edgecolor='black', alpha=alpha, label=l, density=False)
-            ax.hist(residuals_filter[key], bins=bins, color='red', edgecolor='black', alpha=alpha, label='GSF', density=False)
-            ax.axvline(0, color='black', linestyle='--', linewidth=1)
+
+            ax = axes[i - 1]
+            ax.hist(
+                residuals_ml[key],
+                bins=bins,
+                color=c,
+                edgecolor="black",
+                alpha=alpha,
+                label=l,
+                density=False,
+            )
+            ax.hist(
+                residuals_filter[key],
+                bins=bins,
+                color="red",
+                edgecolor="black",
+                alpha=alpha,
+                label="GSF",
+                density=False,
+            )
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
             ax.grid(True)
-            ax.set_xlim(ranges[i-1])
+            ax.set_xlim(ranges[i - 1])
             ax.set_xlabel(f"Residual ({units[i-1]})")
             ax.set_ylabel("Frequency")
             ax.set_title(f"Residuals for {key}")
             ax.legend()
-            
+
             # plt.hist(residuals_ml[key], bins=n_bins_list[i-1], color='blue', edgecolor='black', alpha=alpha, label='MLP', density=False)
             # plt.hist(residuals_ml[key], bins=50, color='blue', edgecolor='black', alpha=alpha, label='MLP', density=False)
             # ax = plt.gca()
@@ -826,7 +943,6 @@ class Evaluator():
             # plt.ylabel("Frequency")
             # plt.title(f"Residuals for {key}")
             # plt.legend()
-            
 
         # ax = plt.gca()
         # ax[0].set_xlim([-0.025, 0.025])
@@ -836,53 +952,53 @@ class Evaluator():
         # ax[4].set_xlim([-0.04, 0.04])
         fig.suptitle(f"{l} residuals compared to GSF residuals")
         plt.tight_layout()
-        res_fig_path = os.path.join(figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending)
+        res_fig_path = os.path.join(
+            figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending
+        )
         plt.savefig(res_fig_path, dpi=300)
         # plt.show()
         print("Saved model VS. filter z_0 comparison to", res_fig_path)
 
-
     # Copypaste of the two functions above for combining the MLP and transformer figures
     # into one
     def pocaModelToGSFComparisonCombined(
-        self,
-        mlp_model,
-        tr_model,
-        test_data_dir,
-        figures_dir,
-        file_name_ending
+        self, mlp_model, tr_model, test_data_dir, figures_dir, file_name_ending
     ):
         test_measurements_df = self.data_handler.createMeasurementDfPOCA(test_data_dir)
         test_particles_df = self.data_handler.createPOCAParameterDf(test_data_dir)
         X_test = self.data_handler.preprocessX(test_measurements_df)
         y_test = self.data_handler.preprocessY(test_particles_df)
         test_dataset = MlDataset(X_test, y_test)
-        mlp_predictions = self.makePredictions(mlp_model, test_dataset, is_transformer=False)
-        tr_predictions = self.makePredictions(tr_model, test_dataset, is_transformer=True)
+        mlp_predictions = self.makePredictions(
+            mlp_model, test_dataset, is_transformer=False
+        )
+        tr_predictions = self.makePredictions(
+            tr_model, test_dataset, is_transformer=True
+        )
 
-        mlp_pred_d0 = mlp_predictions[:,0]
-        mlp_pred_z0 = mlp_predictions[:,1]
-        mlp_pred_phi = mlp_predictions[:,2]
-        mlp_pred_theta = mlp_predictions[:,3]
-        mlp_pred_q_over_p = mlp_predictions[:,4]
+        mlp_pred_d0 = mlp_predictions[:, 0]
+        mlp_pred_z0 = mlp_predictions[:, 1]
+        mlp_pred_phi = mlp_predictions[:, 2]
+        mlp_pred_theta = mlp_predictions[:, 3]
+        mlp_pred_q_over_p = mlp_predictions[:, 4]
 
-        tr_pred_d0 = tr_predictions[:,0]
-        tr_pred_z0 = tr_predictions[:,1]
-        tr_pred_phi = tr_predictions[:,2]
-        tr_pred_theta = tr_predictions[:,3]
-        tr_pred_q_over_p = tr_predictions[:,4]
+        tr_pred_d0 = tr_predictions[:, 0]
+        tr_pred_z0 = tr_predictions[:, 1]
+        tr_pred_phi = tr_predictions[:, 2]
+        tr_pred_theta = tr_predictions[:, 3]
+        tr_pred_q_over_p = tr_predictions[:, 4]
 
-        d0_truth =       test_particles_df["d0"].to_numpy()
-        z0_truth =       test_particles_df["z0"].to_numpy()
-        phi_truth =      test_particles_df["phi"].to_numpy()
-        theta_truth =    test_particles_df["theta"].to_numpy()
+        d0_truth = test_particles_df["d0"].to_numpy()
+        z0_truth = test_particles_df["z0"].to_numpy()
+        phi_truth = test_particles_df["phi"].to_numpy()
+        theta_truth = test_particles_df["theta"].to_numpy()
         q_over_p_truth = test_particles_df["q_over_p"].to_numpy()
-        
+
         filter_df = self.data_handler.createFilterTrackSummaryDf(test_data_dir)
-        d0_filter =       filter_df["est_d0"].to_numpy()
-        z0_filter =       filter_df["est_z0"].to_numpy()
-        phi_filter =      filter_df["est_phi"].to_numpy()
-        theta_filter =    filter_df["est_theta"].to_numpy()
+        d0_filter = filter_df["est_d0"].to_numpy()
+        z0_filter = filter_df["est_z0"].to_numpy()
+        phi_filter = filter_df["est_phi"].to_numpy()
+        theta_filter = filter_df["est_theta"].to_numpy()
         q_over_p_filter = filter_df["est_q_over_p"].to_numpy()
 
         residuals_mlp = {
@@ -890,28 +1006,24 @@ class Evaluator():
             r"$z_0$": z0_truth - mlp_pred_z0,
             r"$\phi$": phi_truth - mlp_pred_phi,
             r"$\theta$": theta_truth - mlp_pred_theta,
-            r"$q/p$": q_over_p_truth - mlp_pred_q_over_p
+            r"$q/p$": q_over_p_truth - mlp_pred_q_over_p,
         }
         residuals_tr = {
             r"$d_0$": d0_truth - tr_pred_d0,
             r"$z_0$": z0_truth - tr_pred_z0,
             r"$\phi$": phi_truth - tr_pred_phi,
             r"$\theta$": theta_truth - tr_pred_theta,
-            r"$q/p$": q_over_p_truth - tr_pred_q_over_p
+            r"$q/p$": q_over_p_truth - tr_pred_q_over_p,
         }
         residuals_filter = {
             r"$d_0$": d0_truth - d0_filter,
             r"$z_0$": z0_truth - z0_filter,
             r"$\phi$": phi_truth - phi_filter,
             r"$\theta$": theta_truth - theta_filter,
-            r"$q/p$": q_over_p_truth - q_over_p_filter
+            r"$q/p$": q_over_p_truth - q_over_p_filter,
         }
         self.mlVsModelPlottingCombined(
-            residuals_mlp,
-            residuals_tr,
-            residuals_filter,
-            figures_dir,
-            file_name_ending
+            residuals_mlp, residuals_tr, residuals_filter, figures_dir, file_name_ending
         )
 
     def mlVsModelPlottingCombined(
@@ -920,7 +1032,7 @@ class Evaluator():
         residuals_tr,
         residuals_filter,
         figures_dir,
-        file_name_ending
+        file_name_ending,
     ):
         # plt.figure(figsize=(15, 10))
         alpha = 0.6
@@ -931,7 +1043,7 @@ class Evaluator():
             r"$z_0^{\text{true}}-z_0^{\text{fit}$ [mm]",
             r"$\phi{\text{true}}-\phi^{\text{fit}}$ [rad]",
             r"$\theta^{\text{true}}-\theta^{\text{fit}}$ [rad]",
-            r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]"
+            r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]",
         ]
         non_latex_names = ["d₀", "z₀", "φ", "θ", "q/p"]
 
@@ -960,9 +1072,11 @@ class Evaluator():
             # plt.subplot(2, 3, i)  # 2 rows × 3 columns grid
 
             # Combined bins calculation for combined image
-            n_bins = n_bins_list[i-1]
+            n_bins = n_bins_list[i - 1]
             print("Stacking values...")
-            combined = np.hstack((residuals_mlp[key], residuals_tr[key], residuals_filter[key]))
+            combined = np.hstack(
+                (residuals_mlp[key], residuals_tr[key], residuals_filter[key])
+            )
             min_val, max_val = np.nanmin(combined), np.nanmax(combined)
             # bins = 200  # adjust as needed
             print("Creating linspace")
@@ -976,13 +1090,37 @@ class Evaluator():
             # plt.hist(residuals_filter[key], bins, color='skyblue', edgecolor='black', alpha=0.5, label='Filter', density=False)
 
             print(f"Plotting {key}")
-            ax = axes[i-1]
-            ax.hist(residuals_mlp[key], bins=bins, color="royalblue", edgecolor='black', alpha=alpha, label="MLP", density=False)
-            ax.hist(residuals_tr[key], bins=bins, color="darkorange", edgecolor='black', alpha=alpha, label="Transformer", density=False)
-            ax.hist(residuals_filter[key], bins=bins, color='red', edgecolor='black', alpha=alpha, label='GSF', density=False)
-            ax.axvline(0, color='black', linestyle='--', linewidth=1)
+            ax = axes[i - 1]
+            ax.hist(
+                residuals_mlp[key],
+                bins=bins,
+                color="royalblue",
+                edgecolor="black",
+                alpha=alpha,
+                label="MLP",
+                density=False,
+            )
+            ax.hist(
+                residuals_tr[key],
+                bins=bins,
+                color="darkorange",
+                edgecolor="black",
+                alpha=alpha,
+                label="Transformer",
+                density=False,
+            )
+            ax.hist(
+                residuals_filter[key],
+                bins=bins,
+                color="red",
+                edgecolor="black",
+                alpha=alpha,
+                label="GSF",
+                density=False,
+            )
+            ax.axvline(0, color="black", linestyle="--", linewidth=1)
             ax.grid(True)
-            ax.set_xlim(ranges[i-1])
+            ax.set_xlim(ranges[i - 1])
             # ax.set_xlabel(f"Residual [{units[i-1]}]")
             ax.set_xlabel(f"{labels[i-1]}")
             ax.set_ylabel("Frequency")
@@ -996,7 +1134,6 @@ class Evaluator():
             # plt.ylabel("Frequency")
             # plt.title(f"Residuals for {key}")
             # plt.legend()
-            
 
         # ax = plt.gca()
         # ax[0].set_xlim([-0.025, 0.025])
@@ -1007,34 +1144,38 @@ class Evaluator():
         print("Postprocessing")
         fig.suptitle(f"ML residuals compared to GSF residuals")
         plt.tight_layout()
-        res_fig_path = os.path.join(figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending)
+        res_fig_path = os.path.join(
+            figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending
+        )
         plt.savefig(res_fig_path, dpi=300)
         # plt.show()
         print("Saved model VS. filter z_0 comparison to", res_fig_path)
-
-
 
     def makePredictions(
         self,
         model,
         evaluation_dataset,
-        is_transformer, # for makeTransformerResidualPredictions or makeMlpResidualPredictions
+        is_transformer,  # for makeTransformerResidualPredictions or makeMlpResidualPredictions
         return_targets=False,
-        event_batch_size=1024
+        event_batch_size=1024,
     ):
         model.eval()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         # Important that the loader does not shuffle in test cases where the order is assumed to be
         # the same in comparisons with e.g. the truth or the GSF
-        dataloader = DataLoader(evaluation_dataset, batch_size=event_batch_size, shuffle=False)
+        dataloader = DataLoader(
+            evaluation_dataset, batch_size=event_batch_size, shuffle=False
+        )
         all_preds = []
         if return_targets:
             all_targets = []
         with torch.no_grad():
             for X_batch, y_batch in dataloader:
                 if is_transformer:
-                    preds = self.makeTransformerResidualPredictions(model, X_batch, y_batch, device)
+                    preds = self.makeTransformerResidualPredictions(
+                        model, X_batch, y_batch, device
+                    )
                 else:
                     preds = self.makeMlpResidualPredictions(model, X_batch, device)
                 all_preds.append(preds)
@@ -1049,7 +1190,6 @@ class Evaluator():
             all_targets = self.output_scaler.inverse_transform(all_targets)
             return (all_preds, all_targets)
         return all_preds
-    
 
     # ##################################################
     # # Correlation plotting
