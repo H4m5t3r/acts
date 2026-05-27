@@ -20,6 +20,7 @@ import acts.examples
 from acts import UnitConstants as u
 from acts.examples.odd import getOpenDataDetector, getOpenDataDetectorDirectory
 from acts.examples.root import (
+    RootParticleReader,
     RootSimHitReader,
 )
 
@@ -95,7 +96,17 @@ def runTrackFindingPythonOnly(
 
     from regressor_models import MLP, printModelSummary
 
-    s = s or acts.examples.Sequencer(events=1, numThreads=1, logLevel=acts.logging.INFO)
+    if args.read_data:
+        # Previous data scalers loaded here, will have to initialize with new directory to create new scalers
+        dataHandler = DataHandler([dataDir], load_data_scalers=True)
+        mlInputs = dataHandler.readX([dataDir])
+        nEvents = len(mlInputs)
+    else:
+        nEvents = 1
+
+    s = s or acts.examples.Sequencer(
+        events=nEvents, numThreads=1, logLevel=acts.logging.INFO
+    )
     outputDir = Path(outputDir)
     rnd = acts.examples.RandomNumbers(seed=42)
     logger = acts.getDefaultLogger("Python Tracking Example", acts.logging.INFO)
@@ -104,6 +115,7 @@ def runTrackFindingPythonOnly(
         s.addContextDecorator(d)
 
     if inputParticlePath is None:
+        logger.info("Generating particles with addParticleGun()")
         addParticleGun(
             s,
             MomentumConfig(1.0 * u.GeV, 10.0 * u.GeV, transverse=True),
@@ -128,6 +140,7 @@ def runTrackFindingPythonOnly(
         s.addWhiteboardAlias("particles", "particles_generated_selected")
 
     if inputSimHitsPath is None:
+        logger.info("Using Fatras")
         addFatras(
             s,
             trackingGeometry,
@@ -284,6 +297,9 @@ def runTrackFindingPythonOnly(
                 for num in range(10)
             ]
 
+            # Glued together to work: Data directories not actually used here
+            # NOTE: Now potential double data reading if new scalers are actually created
+            # See earlier DataHandler
             dh = DataHandler(train_data_dirs, load_data_scalers=True)
             input_scaler = dh.getInputScaler()
             output_scaler = dh.getOutputScaler()
@@ -390,20 +406,18 @@ def runTrackFindingPythonOnly(
     return s, perfWriter
 
 
-def runMlPredictionsFromRootData(
+def runMlPredictionsFromOddRootData(
     trackingGeometry,
     field,
     digiConfigFile,
     geoSelectionConfigFile,
     outputDir,
     mlModelFile,
-    dataDirs,
+    dataDir,
     decorators=[],
     s=None,
 ):
     from acts.examples.root import (
-        RootParticleReader,
-        RootSimHitReader,
         RootTrackSummaryWriter,
     )
     from acts.examples.reconstruction import addTruthTrackingGsf
@@ -414,18 +428,20 @@ def runMlPredictionsFromRootData(
     )
     from regressor_models import MLP
 
-    particleFile = dataDirs[0] / "root" / "particles.root"
+    particleFile = dataDir / "root" / "particles.root"
     if not particleFile.exists():
         raise FileNotFoundError(f"Could not find particle ROOT file '{particleFile}'. ")
 
-    simHitsFile = dataDirs[0] / "hits.root"
+    simHitsFile = dataDir / "hits.root"
     if not simHitsFile.exists():
         raise FileNotFoundError(f"Could not find sim-hit ROOT file '{simHitsFile}'. ")
 
     # Bottleneck: Data potentially read twice if data scalers are not loaded
-    dataHandler = DataHandler(dataDirs, load_data_scalers=True)
-    mlInputs = dataHandler.readX(dataDirs)
-    outputScaler = dataHandler.getOutputScaler()
+    dh = DataHandler([dataDir], load_data_scalers=True)
+    mlInputs = dh.readX([dataDir])
+    print(len(mlInputs))
+    sys.exit(0)
+    outputScaler = dh.getOutputScaler()
 
     nEvents = len(mlInputs)
     s = s or acts.examples.Sequencer(
@@ -771,12 +787,10 @@ if __name__ == "__main__":
 
     mlModelFile = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
     # dataDirs = ["/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"]
-    dataDirs = [
-        Path(
-            "/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"
-        )
-        # Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_1/electron/geant4/train_2")
-    ]
+    dataDir = Path(
+        "/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"
+    )
+    # dataDir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_1/electron/geant4/train_2")
 
     outputDir = Path.cwd() / "output_track_finding_python_only"
     outputDir.mkdir(exist_ok=True)
@@ -802,14 +816,14 @@ if __name__ == "__main__":
     )
     # ...or read simulated data from ROOT files
     # s, perfWriter, gsfPerfWriter, mlSummaryPath, gsfSummaryPath = (
-    #     runMlPredictionsFromRootData(
+    #     runMlPredictionsFromOddRootData(
     #         trackingGeometry=trackingGeometry,
     #         field=field,
     #         digiConfigFile=digiConfigFile,
     #         geoSelectionConfigFile=geoSelectionConfigFile,
     #         outputDir=outputDir,
     #         mlModelFile=mlModelFile,
-    #         dataDirs=dataDirs,
+    #         dataDir=dataDir,
     #         decorators=decorators,
     #     )
     # )
