@@ -220,6 +220,7 @@ def runTrackFindingPythonOnly(
     # s.addAlgorithm(PythonTrackFinder("PythonTrackFinder", acts.logging.INFO))
 
     # NOT NEEDED?
+    # Codex: It would only be needed if you later add an algorithm that consumes generated-particle track parameters, for example truth-smearing / seed-parameter estimation, propagation from truth parameters, material validation, or a writer/printer for those parameters
     # trkParamExtractor = acts.examples.ParticleTrackParamExtractor(
     #     level=acts.logging.INFO,
     #     inputParticles="particles_generated_selected",
@@ -767,6 +768,9 @@ def runOddMlTrackFinding(
 
     os.makedirs(outputDir, exist_ok=True)
 
+    inputParticlePath = outputDir / "root" / "particles.root"
+    inputSimHitsPath = outputDir / "hits.root"
+
     if inputParticlePath is None:
         # GENERIC DETECTOR EXAMPLE VARIANT
         # addParticleGun(
@@ -812,7 +816,8 @@ def runOddMlTrackFinding(
                 outputParticles="particles_generated",
             )
         )
-        s.addWhiteboardAlias("particles", "particles_generated")
+        # s.addWhiteboardAlias("particles", "particles_generated")
+        s.addWhiteboardAlias("particles_generated_selected", "particles_generated")
 
     if inputSimHitsPath is None:
         if mode == "fatras":
@@ -875,9 +880,6 @@ def runOddMlTrackFinding(
         ),
     )
 
-    # CONTINUE FROM HERE
-    # ...
-
     #####################
     # ML
     #####################
@@ -936,6 +938,10 @@ def runOddMlTrackFinding(
                 self, acts.SpacePointContainer2, "Spacepoints"
             )
             self.spacepoints.initialize("spacepoints")
+
+            self.perigeeSurface = acts.Surface.createPerigee(
+                acts.Vector3(0.0, 0.0, 0.0)
+            )
 
             self.max_seq_len = 20
 
@@ -1049,9 +1055,14 @@ def runOddMlTrackFinding(
                 # print(output)
 
                 track = container.makeTrack()
+                track.referenceSurface = self.perigeeSurface
                 track.parameters = acts.BoundVector(
                     output[0], output[1], output[2], output[3], output[4], 1.0
                 )
+                track.particleHypothesis = acts.ParticleHypothesis.electron
+                track.covariance = acts.BoundMatrix.Identity()
+                track.chi2 = 0.0
+                track.nHoles = 0
                 track.nMeasurements = len(prototrack)
 
                 # Attach measurements to the track state. Use the original source
@@ -1118,12 +1129,15 @@ def runOddMlTrackFinding(
     )
     s.addWriter(perfWriter)
 
+    # Not working at the moment, need to extend the Python fitter/bindings to also fill calibrated measurements and projector information correctly
     # s.addWriter(
     #     RootTrackStatesWriter(
     #         level=acts.logging.INFO,
-    #         inputTracks="tracks",
+    #         # inputTracks="tracks",
+    #         inputTracks="fitted_tracks",
     #         # inputParticles="particles_selected",
-    #         inputParticles="particles",
+    #         # inputParticles="particles",
+    #         inputParticles="particles_generated_selected",
     #         inputTrackParticleMatching="track_particle_matching",
     #         inputSimHits="simhits",
     #         inputMeasurementSimHitsMap="measurement_simhits_map",
@@ -1135,9 +1149,11 @@ def runOddMlTrackFinding(
     # s.addWriter(
     #     RootTrackSummaryWriter(
     #         level=acts.logging.INFO,
-    #         inputTracks="tracks",
+    #         # inputTracks="tracks",
+    #         inputTracks="fitted_tracks",
     #         # inputParticles="particles_selected",
-    #         inputParticles="particles",
+    #         # inputParticles="particles",
+    #         inputParticles="particles_generated_selected",
     #         inputTrackParticleMatching="track_particle_matching",
     #         # filePath=str(outputDir / "tracksummary.root"),
     #         filePath=str(outputDir / "tracksummary_gsf.root"),
@@ -1148,9 +1164,11 @@ def runOddMlTrackFinding(
     # s.addWriter(
     #     RootTrackFitterPerformanceWriter(
     #         level=acts.logging.INFO,
-    #         inputTracks="tracks",
+    #         # inputTracks="tracks",
+    #         inputTracks="fitted_tracks",
     #         # inputParticles="particles_selected",
-    #         inputParticles="particles",
+    #         # inputParticles="particles",
+    #         inputParticles="particles_generated_selected",
     #         inputTrackParticleMatching="track_particle_matching",
     #         # filePath=str(outputDir / "performance.root"),
     #         filePath=str(outputDir / "performance_gsf.root"),
@@ -1559,8 +1577,8 @@ if __name__ == "__main__":
     outputDir.mkdir(exist_ok=True)
 
     if args.read_data:
-        inputParticlePath = outputDir / "root" / "particles.root"
-        inputSimHitsPath = outputDir / "hits.root"
+        inputParticlePath = outputDir
+        inputSimHitsPath = outputDir
     else:
         inputParticlePath = None
         inputSimHitsPath = None
