@@ -120,6 +120,9 @@ def runTrackFindingPythonOnly(
     for d in decorators:
         s.addContextDecorator(d)
 
+    inputParticlePath = outputDir / "root" / "particles.root"
+    inputSimHitsPath = outputDir / "hits.root"
+
     if inputParticlePath is None:
         logger.info("Generating particles with addParticleGun()")
         addParticleGun(
@@ -1584,17 +1587,17 @@ if __name__ == "__main__":
         inputSimHitsPath = None
 
     # Simulate data on the go...
-    # s, perfWriter = runTrackFindingPythonOnly(
-    #     trackingGeometry=trackingGeometry,
-    #     field=field,
-    #     digiConfigFile=digiConfigFile,
-    #     geoSelectionConfigFile=geoSelectionConfigFile,
-    #     outputDir=outputDir,
-    #     mlModelFile=mlModelFile,
-    #     inputParticlePath=inputParticlePath,
-    #     inputSimHitsPath=inputSimHitsPath,
-    #     decorators=decorators,
-    # )
+    s, perfWriter = runTrackFindingPythonOnly(
+        trackingGeometry=trackingGeometry,
+        field=field,
+        digiConfigFile=digiConfigFile,
+        geoSelectionConfigFile=geoSelectionConfigFile,
+        outputDir=outputDir,
+        mlModelFile=mlModelFile,
+        inputParticlePath=inputParticlePath,
+        inputSimHitsPath=inputSimHitsPath,
+        decorators=decorators,
+    )
     # s.run()
     # s, perfWriter = runOddTrackFinding(
     # s = runOddGsfTrackFinding(
@@ -1609,18 +1612,18 @@ if __name__ == "__main__":
     #     inputSimHitsPath=inputSimHitsPath,
     #     decorators=decorators,
     # )
-    s, perfWriter = runOddMlTrackFinding(
-        trackingGeometry=trackingGeometry,
-        field=field,
-        digiConfigFile=digiConfigFile,
-        geoSelectionConfigFile=geoSelectionConfigFile,
-        stripGeoSelectionConfigFile=stripGeoSelectionConfigFile,
-        outputDir=outputDir,
-        mlModelFile=mlModelFile,
-        inputParticlePath=inputParticlePath,
-        inputSimHitsPath=inputSimHitsPath,
-        decorators=decorators,
-    )
+    # s, perfWriter = runOddMlTrackFinding(
+    #     trackingGeometry=trackingGeometry,
+    #     field=field,
+    #     digiConfigFile=digiConfigFile,
+    #     geoSelectionConfigFile=geoSelectionConfigFile,
+    #     stripGeoSelectionConfigFile=stripGeoSelectionConfigFile,
+    #     outputDir=outputDir,
+    #     mlModelFile=mlModelFile,
+    #     inputParticlePath=inputParticlePath,
+    #     inputSimHitsPath=inputSimHitsPath,
+    #     decorators=decorators,
+    # )
     # ...or read simulated data from ROOT files
     # s, perfWriter, gsfPerfWriter, mlSummaryPath, gsfSummaryPath = (
     #     runMlPredictionsFromOddRootData(
