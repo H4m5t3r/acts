@@ -100,13 +100,19 @@ def runTrackFindingPythonOnly(
         # Previous data scalers loaded here, will have to initialize with new directory to create new scalers
         dataHandler = DataHandler([dataDir], load_data_scalers=True)
         mlInputs = dataHandler.readX([dataDir])
-        nEvents = len(mlInputs)
+        n_events = len(mlInputs)
     else:
-        nEvents = 1
+        n_events = 1
 
     s = s or acts.examples.Sequencer(
-        events=nEvents, numThreads=1, logLevel=acts.logging.INFO
+        events=n_events, numThreads=1, logLevel=acts.logging.INFO
     )
+    # mode = "geant4"
+    # s = s or acts.examples.Sequencer(
+    #     events=n_events,
+    #     numThreads=1 if mode == "geant4" else -1,
+    #     logLevel=acts.logging.INFO,
+    # )
     outputDir = Path(outputDir)
     rnd = acts.examples.RandomNumbers(seed=42)
     logger = acts.getDefaultLogger("Python Tracking Example", acts.logging.INFO)
@@ -140,7 +146,6 @@ def runTrackFindingPythonOnly(
         s.addWhiteboardAlias("particles", "particles_generated_selected")
 
     if inputSimHitsPath is None:
-        logger.info("Using Fatras")
         addFatras(
             s,
             trackingGeometry,
@@ -214,12 +219,13 @@ def runTrackFindingPythonOnly(
 
     # s.addAlgorithm(PythonTrackFinder("PythonTrackFinder", acts.logging.INFO))
 
-    trkParamExtractor = acts.examples.ParticleTrackParamExtractor(
-        level=acts.logging.INFO,
-        inputParticles="particles_generated_selected",
-        outputTrackParameters="true_parameters",
-    )
-    s.addAlgorithm(trkParamExtractor)
+    # NOT NEEDED?
+    # trkParamExtractor = acts.examples.ParticleTrackParamExtractor(
+    #     level=acts.logging.INFO,
+    #     inputParticles="particles_generated_selected",
+    #     outputTrackParameters="true_parameters",
+    # )
+    # s.addAlgorithm(trkParamExtractor)
 
     truthTrkFndAlg = acts.examples.TruthTrackFinder(
         level=acts.logging.INFO,
@@ -304,6 +310,7 @@ def runTrackFindingPythonOnly(
             input_scaler = dh.getInputScaler()
             output_scaler = dh.getOutputScaler()
 
+            print(measurement_to_spacepoint)
             for prototrack in prototracks:
                 ml_input = np.array(
                     [
@@ -315,6 +322,9 @@ def runTrackFindingPythonOnly(
                         for meas_id in prototrack
                     ]
                 )
+                print([meas_id for meas_id in prototrack])
+                print(ml_input)
+                # sys.exit(0)
 
                 fig = plt.figure(figsize=(4, 4))
                 ax = fig.add_subplot(111, projection="3d")
@@ -402,6 +412,750 @@ def runTrackFindingPythonOnly(
         acts.logging.VERBOSE,
     )
     s.addWriter(perfWriter)
+
+    return s, perfWriter
+
+
+def runOddGsfTrackFinding(
+    trackingGeometry,
+    field,
+    digiConfigFile,
+    geoSelectionConfigFile,
+    stripGeoSelectionConfigFile,
+    outputDir,
+    mlModelFile,
+    inputParticlePath: Optional[Path] = None,
+    inputSimHitsPath: Optional[Path] = None,
+    decorators=[],
+    s=None,
+):
+    from acts.examples.simulation import (
+        addParticleGun,
+        ParticleConfig,
+        EtaConfig,
+        PhiConfig,
+        MomentumConfig,
+        addFatras,
+        addDigitization,
+        ParticleSelectorConfig,
+        addDigiParticleSelection,
+        addGeant4,
+    )
+    from acts.examples.reconstruction import (
+        addSeeding,
+        SeedingAlgorithm,
+        TrackSmearingSigmas,
+        addTruthTrackingGsf,
+    )
+    from acts.examples.root import (
+        RootTrackStatesWriter,
+        RootTrackSummaryWriter,
+        RootTrackFitterPerformanceWriter,
+    )
+
+    from regressor_models import MLP, printModelSummary
+
+    if args.read_data:
+        # Previous data scalers loaded here, will have to initialize with new directory to create new scalers
+        dataHandler = DataHandler([dataDir], load_data_scalers=True)
+        mlInputs = dataHandler.readX([dataDir])
+        n_events = len(mlInputs)
+    else:
+        n_events = 1
+
+    mode = "fatras"
+    # mode = "geant4"
+    s = s or acts.examples.Sequencer(
+        events=n_events,
+        numThreads=1 if mode == "geant4" else -1,
+        logLevel=acts.logging.INFO,
+    )
+
+    for d in decorators:
+        s.addContextDecorator(d)
+
+    outputDir = outputDir / "electron"
+    data_type = "train"
+    if mode == "fatras":
+        outputDir = outputDir / "fatras"
+    else:
+        outputDir = outputDir / "geant4"
+    print(outputDir)
+    print(type(outputDir))
+    if n_events == 10000:
+        dir_ending = ""
+    else:
+        dir_ending = "_{}".format(str(n_events))
+    if data_type == "train":
+        outputDir = outputDir / ("train" + dir_ending)
+    else:
+        outputDir = outputDir / ("test" + dir_ending)
+    print(outputDir)
+    print(type(outputDir))
+
+    RANDOM_SEED = 42
+    rnd = acts.examples.RandomNumbers(seed=RANDOM_SEED)
+    outputDir = Path(outputDir)
+    logger = acts.getDefaultLogger("GSF Example", acts.logging.INFO)
+
+    os.makedirs(outputDir, exist_ok=True)
+
+    if inputParticlePath is None:
+        addParticleGun(
+            s,
+            ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+            EtaConfig(-3.0, 3.0, uniform=True),
+            MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
+            PhiConfig(0.0, 360.0 * u.degree),
+            vtxGen=acts.examples.GaussianVertexGenerator(
+                mean=acts.Vector4(0, 0, 0, 0),
+                # stddev=acts.Vector4(0, 0, 0, 0),
+                stddev=acts.Vector4(0.015, 0.015, 55.0, 0),
+            ),
+            multiplicity=1,
+            rnd=rnd,
+            outputDirCsv=outputDir / "csv",
+            outputDirRoot=outputDir / "root",
+        )
+    else:
+        logger.info("Reading particles from {}", inputParticlePath.resolve())
+        assert inputParticlePath.exists()
+        s.addReader(
+            RootParticleReader(
+                level=acts.logging.INFO,
+                filePath=str(inputParticlePath.resolve()),
+                outputParticles="particles_generated",
+            )
+        )
+        s.addWhiteboardAlias("particles", "particles_generated")
+
+    if inputSimHitsPath is None:
+        if mode == "fatras":
+            print("Running Fatras simulation")
+            addFatras(
+                s,
+                trackingGeometry,
+                field,
+                rnd=rnd,
+                enableInteractions=True,
+            )
+        else:
+            print("Running Geant4 simulation")
+            addGeant4(
+                s,
+                detector,
+                trackingGeometry,
+                field,
+                outputDirCsv=outputDir / "geant4_csv",
+                outputDirRoot=outputDir,
+                outputDirObj=outputDir / "geant4_obj",
+                rnd=rnd,
+                materialMappings=["Silicon"],
+                volumeMappings=[],
+                killVolume=trackingGeometry.highestTrackingVolume,
+                killAfterTime=25 * u.ns,
+                recordHitsOfSecondaries=False,
+                keepParticlesWithoutHits=False,
+                killSecondaries=True,
+            )
+    else:
+        logger.info("Reading hits from {}", inputSimHitsPath.resolve())
+        s.addReader(
+            RootSimHitReader(
+                level=acts.logging.INFO,
+                filePath=str(inputSimHitsPath.resolve()),
+                outputSimHits="simhits",
+            )
+        )
+        s.addWhiteboardAlias("particles_simulated_selected", "particles_generated")
+
+    addDigitization(
+        s,
+        trackingGeometry,
+        field,
+        digiConfigFile=digiConfigFile,
+        rnd=rnd,
+        outputDirCsv=outputDir / "csv",
+        outputDirRoot=outputDir / "root",
+    )
+
+    addDigiParticleSelection(
+        s,
+        ParticleSelectorConfig(
+            pt=(0.9 * u.GeV, None),
+            measurements=(7, None),
+            removeNeutral=True,
+            removeSecondaries=True,
+        ),
+    )
+
+    addSeeding(
+        s,
+        trackingGeometry,
+        field,
+        rnd=rnd,
+        inputParticles="particles_generated",
+        seedingAlgorithm=SeedingAlgorithm.TruthSmeared,
+        trackSmearingSigmas=TrackSmearingSigmas(
+            # zero everything so the GSF has a chance to find the measurements
+            loc0=0,
+            loc0PtA=0,
+            loc0PtB=0,
+            loc1=0,
+            loc1PtA=0,
+            loc1PtB=0,
+            time=0,
+            phi=0,
+            theta=0,
+            ptRel=0,
+        ),
+        particleHypothesis=acts.ParticleHypothesis.electron,
+        initialSigmas=[
+            1 * u.mm,
+            1 * u.mm,
+            1 * u.degree,
+            1 * u.degree,
+            0 / u.GeV,
+            1 * u.ns,
+        ],
+        initialSigmaQoverPt=0.1 / u.GeV,
+        initialSigmaPtRel=0.1,
+        initialVarInflation=[1e0, 1e0, 1e0, 1e0, 1e0, 1e0],
+    )
+
+    addTruthTrackingGsf(
+        s,
+        trackingGeometry,
+        field,
+    )
+
+    s.addAlgorithm(
+        acts.examples.TrackSelectorAlgorithm(
+            level=acts.logging.INFO,
+            inputTracks="tracks",
+            outputTracks="selected-tracks",
+            selectorConfig=acts.TrackSelector.Config(
+                minMeasurements=7,
+            ),
+        )
+    )
+    s.addWhiteboardAlias("tracks", "selected-tracks")
+
+    s.addWriter(
+        RootTrackStatesWriter(
+            level=acts.logging.INFO,
+            inputTracks="tracks",
+            inputParticles="particles_selected",
+            inputTrackParticleMatching="track_particle_matching",
+            inputSimHits="simhits",
+            inputMeasurementSimHitsMap="measurement_simhits_map",
+            # filePath=str(outputDir / "trackstates.root"),
+            filePath=str(outputDir / "trackstates_gsf.root"),
+        )
+    )
+
+    s.addWriter(
+        RootTrackSummaryWriter(
+            level=acts.logging.INFO,
+            inputTracks="tracks",
+            inputParticles="particles_selected",
+            inputTrackParticleMatching="track_particle_matching",
+            # filePath=str(outputDir / "tracksummary.root"),
+            filePath=str(outputDir / "tracksummary_gsf.root"),
+            writeGsfSpecific=True,
+        )
+    )
+
+    s.addWriter(
+        RootTrackFitterPerformanceWriter(
+            level=acts.logging.INFO,
+            inputTracks="tracks",
+            inputParticles="particles_selected",
+            inputTrackParticleMatching="track_particle_matching",
+            # filePath=str(outputDir / "performance.root"),
+            filePath=str(outputDir / "performance_gsf.root"),
+        )
+    )
+
+    return s
+
+
+def runOddMlTrackFinding(
+    trackingGeometry,
+    field,
+    digiConfigFile,
+    geoSelectionConfigFile,
+    stripGeoSelectionConfigFile,
+    outputDir,
+    mlModelFile,
+    inputParticlePath: Optional[Path] = None,
+    inputSimHitsPath: Optional[Path] = None,
+    decorators=[],
+    s=None,
+):
+    from acts.examples.simulation import (
+        addParticleGun,
+        ParticleConfig,
+        EtaConfig,
+        PhiConfig,
+        MomentumConfig,
+        addFatras,
+        addDigitization,
+        ParticleSelectorConfig,
+        addDigiParticleSelection,
+        addGeant4,
+    )
+    from acts.examples.reconstruction import (
+        addSeeding,
+        SeedingAlgorithm,
+        TrackSmearingSigmas,
+        addTruthTrackingGsf,
+    )
+    from acts.examples.root import (
+        RootTrackStatesWriter,
+        RootTrackSummaryWriter,
+        RootTrackFitterPerformanceWriter,
+    )
+
+    from regressor_models import MLP, printModelSummary
+
+    if args.read_data:
+        # Previous data scalers loaded here, will have to initialize with new directory to create new scalers
+        dataHandler = DataHandler([dataDir], load_data_scalers=True)
+        mlInputs = dataHandler.readX([dataDir])
+        n_events = len(mlInputs)
+    else:
+        n_events = 1
+
+    mode = "fatras"
+    # mode = "geant4"
+    s = s or acts.examples.Sequencer(
+        events=n_events, numThreads=1, logLevel=acts.logging.INFO
+    )
+    # s = s or acts.examples.Sequencer(
+    #     events=n_events,
+    #     numThreads=1 if mode == "geant4" else -1,
+    #     logLevel=acts.logging.INFO,
+    # )
+
+    for d in decorators:
+        s.addContextDecorator(d)
+
+    outputDir = outputDir / "electron"
+    data_type = "train"
+    if mode == "fatras":
+        outputDir = outputDir / "fatras"
+    else:
+        outputDir = outputDir / "geant4"
+    # print(outputDir)
+    # print(type(outputDir))
+    if n_events == 10000:
+        dir_ending = ""
+    else:
+        dir_ending = "_{}".format(str(n_events))
+    if data_type == "train":
+        outputDir = outputDir / ("train" + dir_ending)
+    else:
+        outputDir = outputDir / ("test" + dir_ending)
+    print(outputDir)
+    print(type(outputDir))
+
+    RANDOM_SEED = 42
+    rnd = acts.examples.RandomNumbers(seed=RANDOM_SEED)
+    outputDir = Path(outputDir)
+    logger = acts.getDefaultLogger("GSF Example", acts.logging.INFO)
+
+    os.makedirs(outputDir, exist_ok=True)
+
+    if inputParticlePath is None:
+        # GENERIC DETECTOR EXAMPLE VARIANT
+        # addParticleGun(
+        #     s,
+        #     ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+        #     EtaConfig(-3.0, 3.0, uniform=True),
+        #     MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
+        #     PhiConfig(0.0, 360.0 * u.degree),
+        #     vtxGen=acts.examples.GaussianVertexGenerator(
+        #         mean=acts.Vector4(0, 0, 0, 0),
+        #         # stddev=acts.Vector4(0, 0, 0, 0),
+        #         stddev=acts.Vector4(0.015, 0.015, 55., 0),
+        #     ),
+        #     multiplicity=1,
+        #     rnd=rnd,
+        #     outputDirCsv=outputDir / "csv",
+        #     outputDirRoot=outputDir / "root",
+        # )
+        # 2025 GSF VARIANT
+        addParticleGun(
+            s,
+            ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+            EtaConfig(-3.0, 3.0, uniform=True),
+            MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
+            PhiConfig(0.0, 360.0 * u.degree),
+            vtxGen=acts.examples.GaussianVertexGenerator(
+                mean=acts.Vector4(0, 0, 0, 0),
+                # stddev=acts.Vector4(0, 0, 0, 0),
+                stddev=acts.Vector4(0.015, 0.015, 55.0, 0),
+            ),
+            multiplicity=1,
+            rnd=rnd,
+            outputDirCsv=outputDir / "csv",
+            outputDirRoot=outputDir / "root",
+        )
+    else:
+        logger.info("Reading particles from {}", inputParticlePath.resolve())
+        assert inputParticlePath.exists()
+        s.addReader(
+            RootParticleReader(
+                level=acts.logging.INFO,
+                filePath=str(inputParticlePath.resolve()),
+                outputParticles="particles_generated",
+            )
+        )
+        s.addWhiteboardAlias("particles", "particles_generated")
+
+    if inputSimHitsPath is None:
+        if mode == "fatras":
+            addFatras(
+                s,
+                trackingGeometry,
+                field,
+                rnd=rnd,
+                # From the GSF example
+                # enableInteractions=True,
+                # From the generic detector example
+                outputDirRoot=outputDir,
+            )
+        else:
+            addGeant4(
+                s,
+                detector,
+                trackingGeometry,
+                field,
+                outputDirCsv=outputDir / "geant4_csv",
+                outputDirRoot=outputDir,
+                outputDirObj=outputDir / "geant4_obj",
+                rnd=rnd,
+                materialMappings=["Silicon"],
+                volumeMappings=[],
+                killVolume=trackingGeometry.highestTrackingVolume,
+                killAfterTime=25 * u.ns,
+                recordHitsOfSecondaries=False,
+                keepParticlesWithoutHits=False,
+                killSecondaries=True,
+            )
+    else:
+        logger.info("Reading hits from {}", inputSimHitsPath.resolve())
+        s.addReader(
+            RootSimHitReader(
+                level=acts.logging.INFO,
+                filePath=str(inputSimHitsPath.resolve()),
+                outputSimHits="simhits",
+            )
+        )
+        s.addWhiteboardAlias("particles_simulated_selected", "particles_generated")
+
+    addDigitization(
+        s,
+        trackingGeometry,
+        field,
+        digiConfigFile=digiConfigFile,
+        rnd=rnd,
+        outputDirCsv=outputDir / "csv",
+        outputDirRoot=outputDir / "root",
+    )
+
+    addDigiParticleSelection(
+        s,
+        ParticleSelectorConfig(
+            pt=(0.9 * u.GeV, None),
+            measurements=(7, None),
+            removeNeutral=True,
+            removeSecondaries=True,
+        ),
+    )
+
+    # CONTINUE FROM HERE
+    # ...
+
+    #####################
+    # ML
+    #####################
+    s.addAlgorithm(
+        acts.examples.SpacePointMaker(
+            level=acts.logging.INFO,
+            trackingGeometry=trackingGeometry,
+            inputMeasurements="measurement_subset",
+            outputSpacePoints="spacepoints",
+            geometrySelection=acts.examples.json.readJsonGeometryList(
+                str(geoSelectionConfigFile)
+            ),
+            stripGeometrySelection=acts.examples.json.readJsonGeometryList(
+                str(stripGeoSelectionConfigFile)
+            ),
+        )
+    )
+
+    # NOT NEEDED?
+    # trkParamExtractor = acts.examples.ParticleTrackParamExtractor(
+    #     level=acts.logging.INFO,
+    #     inputParticles="particles_generated_selected",
+    #     outputTrackParameters="true_parameters",
+    # )
+    # s.addAlgorithm(trkParamExtractor)
+
+    truthTrkFndAlg = acts.examples.TruthTrackFinder(
+        level=acts.logging.INFO,
+        inputParticles="particles_generated_selected",
+        inputMeasurements="measurements",
+        inputParticleMeasurementsMap="particle_measurements_map",
+        inputSimHits="simhits",
+        inputMeasurementSimHitsMap="measurement_simhits_map",
+        # outputProtoTracks="prototracks",
+        outputProtoTracks="truth_particle_tracks",
+    )
+    s.addAlgorithm(truthTrkFndAlg)
+
+    class PythonTrackFitter(acts.examples.IAlgorithm):
+        def __init__(self, name, level):
+            acts.examples.IAlgorithm.__init__(self, name, level)
+
+            self.prototracks = acts.examples.ReadDataHandle(
+                self, acts.examples.ProtoTrackContainer, "Prototracks"
+            )
+            # self.prototracks.initialize("prototracks")
+            self.prototracks.initialize("truth_particle_tracks")
+
+            self.tracks = acts.examples.WriteDataHandle(
+                self, acts.examples.ConstTrackContainer, "Tracks"
+            )
+            self.tracks.initialize("fitted_tracks")
+
+            # NEW
+            self.spacepoints = acts.examples.ReadDataHandle(
+                self, acts.SpacePointContainer2, "Spacepoints"
+            )
+            self.spacepoints.initialize("spacepoints")
+
+            self.max_seq_len = 20
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # self.mlp = MLP(input_dim=max_seq_len*3, output_dim=5, hidden_dim=32, n_hidden_layers=2)
+            self.mlp = MLP(
+                input_dim=self.max_seq_len * 3,
+                output_dim=5,
+                hidden_dim=256,
+                n_hidden_layers=7,
+            )
+            self.mlp.to(device)
+            self.mlp.load_state_dict(torch.load(mlModelFile, map_location=device))
+
+        def execute(self, context):
+            prototracks = self.prototracks(context.eventStore)
+            spacepoints = self.spacepoints(context.eventStore)
+
+            measurement_to_spacepoint = {}
+            measurement_to_sourcelink = {}
+            for sp in spacepoints:
+                for sl in sp.sourceLinks:
+                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                    meas_id = isl.index()
+                    measurement_to_spacepoint[meas_id] = sp
+                    measurement_to_sourcelink[meas_id] = sl
+
+            container = acts.examples.TrackContainer()
+            surface_map = trackingGeometry.geoIdSurfaceMap()
+            print(prototracks)
+
+            tech_acts_dir = (
+                "/home/taleiko/Documents/CERN/Technical_Student/Program/acts"
+            )
+            train_data_dirs = [
+                os.path.join(
+                    tech_acts_dir,
+                    "mega_data/mega_data_{}/{}/{}/train_100000".format(
+                        str(num), "electron", "geant4"
+                    ),
+                )
+                for num in range(10)
+            ]
+
+            # Glued together to work: Data directories not actually used here
+            # NOTE: Now potential double data reading if new scalers are actually created
+            # See earlier DataHandler
+            dh = DataHandler(train_data_dirs, load_data_scalers=True)
+            input_scaler = dh.getInputScaler()
+            output_scaler = dh.getOutputScaler()
+
+            print(measurement_to_spacepoint)
+            for prototrack in prototracks:
+                # ml_input = np.array(
+                #     [
+                #         [
+                #             measurement_to_spacepoint[meas_id].x,
+                #             measurement_to_spacepoint[meas_id].y,
+                #             measurement_to_spacepoint[meas_id].z,
+                #         ]
+                #         for meas_id in prototrack
+                #     ]
+                # )
+
+                coords = []
+                for meas_id in prototrack:
+                    sp = measurement_to_spacepoint.get(meas_id)
+                    if sp is None:
+                        continue
+                    coords.append([sp.x, sp.y, sp.z])
+                # if len(coords) < 3:
+                #     continue
+                ml_input = np.array(coords)
+
+                print([meas_id for meas_id in prototrack])
+                print(ml_input)
+                # sys.exit(0)
+
+                fig = plt.figure(figsize=(4, 4))
+                ax = fig.add_subplot(111, projection="3d")
+                for coord in ml_input:
+                    ax.scatter(coord[0], coord[1], coord[2])
+                # plt.show()
+                plt.savefig(
+                    "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/trajectory.png"
+                )
+
+                # print(ml_input)
+
+                ml_input = np.flip(ml_input, axis=0)
+                # print(ml_input)
+                scaled_input = input_scaler.transform(ml_input)
+                # print(scaled_input)
+                pad_len = self.max_seq_len - len(scaled_input)
+                scaled_input = np.pad(
+                    scaled_input, ((0, pad_len), (0, 0)), mode="constant"
+                )
+                scaled_input = scaled_input.flatten()
+                # print(scaled_input)
+                scaled_input = torch.tensor(scaled_input, dtype=torch.float32)
+                # print(scaled_input)
+
+                # TODO: This is taped together at the moment. The scaler expects an array of columns. Note output[0] and array([output])
+                with torch.no_grad():
+                    scaled_output = np.array(
+                        [self.mlp(scaled_input).detach().cpu().numpy()]
+                    )
+                output = output_scaler.inverse_transform(scaled_output)
+                # print(output)
+                output = output[0]
+                # print(output)
+
+                track = container.makeTrack()
+                track.parameters = acts.BoundVector(
+                    output[0], output[1], output[2], output[3], output[4], 1.0
+                )
+                track.nMeasurements = len(prototrack)
+
+                # Attach measurements to the track state. Use the original source
+                # link from the reconstructed space point and the matching
+                # surface from the geometry map.
+                for meas_id in prototrack:
+                    # sp = measurement_to_spacepoint[meas_id]
+                    sp = measurement_to_spacepoint.get(meas_id)
+                    if sp is None:
+                        continue
+                    sl = measurement_to_sourcelink[meas_id]
+                    isl = acts.examples.IndexSourceLink.FromSourceLink(sl)
+                    sf = surface_map[isl.geometryId()]
+
+                    trackState = track.appendTrackState()
+                    trackState.typeFlags.isMeasurement = True
+                    trackState.uncalibratedSourceLink = sl
+                    trackState.referenceSurface = sf
+
+            self.tracks(context, container.makeConst())
+            return acts.examples.ProcessCode.SUCCESS
+
+    s.addAlgorithm(PythonTrackFitter("PythonTrackFitter", acts.logging.INFO))
+
+    s.addAlgorithm(
+        acts.examples.TrackTruthMatcher(
+            # level=acts.logging.INFO,
+            level=acts.logging.VERBOSE,
+            inputTracks="fitted_tracks",
+            # inputParticles="particles",
+            inputParticles="particles_generated_selected",
+            inputMeasurementParticlesMap="measurement_particles_map",
+            outputTrackParticleMatching="track_particle_matching",
+            outputParticleTrackMatching="particle_track_matching",
+            doubleMatching=True,
+        )
+    )
+
+    # NOT NEEDED? FROM THE GSF SCRIPT
+    # s.addAlgorithm(
+    #     acts.examples.TrackSelectorAlgorithm(
+    #         level=acts.logging.INFO,
+    #         inputTracks="fitted_tracks",
+    #         outputTracks="selected-tracks",
+    #         selectorConfig=acts.TrackSelector.Config(
+    #             minMeasurements=7,
+    #         ),
+    #     )
+    # )
+    # s.addWhiteboardAlias("tracks", "selected-tracks")
+
+    cfg = acts.examples.PythonTrackFinderPerformanceWriter.Config()
+    cfg.inputTracks = "fitted_tracks"
+    # cfg.inputParticles = "particles"
+    # USE ONLY PARTICLES THAT SURVIVE DIGITIZATION / MEASUREMENT REQUIREMENTS
+    cfg.inputParticles = "particles_generated_selected"
+    cfg.inputTrackParticleMatching = "track_particle_matching"
+    cfg.inputParticleTrackMatching = "particle_track_matching"
+    cfg.inputParticleMeasurementsMap = "particle_measurements_map"
+    perfWriter = acts.examples.PythonTrackFinderPerformanceWriter(
+        # cfg, acts.logging.INFO
+        cfg,
+        acts.logging.VERBOSE,
+    )
+    s.addWriter(perfWriter)
+
+    # s.addWriter(
+    #     RootTrackStatesWriter(
+    #         level=acts.logging.INFO,
+    #         inputTracks="tracks",
+    #         # inputParticles="particles_selected",
+    #         inputParticles="particles",
+    #         inputTrackParticleMatching="track_particle_matching",
+    #         inputSimHits="simhits",
+    #         inputMeasurementSimHitsMap="measurement_simhits_map",
+    #         # filePath=str(outputDir / "trackstates.root"),
+    #         filePath=str(outputDir / "trackstates_gsf.root"),
+    #     )
+    # )
+
+    # s.addWriter(
+    #     RootTrackSummaryWriter(
+    #         level=acts.logging.INFO,
+    #         inputTracks="tracks",
+    #         # inputParticles="particles_selected",
+    #         inputParticles="particles",
+    #         inputTrackParticleMatching="track_particle_matching",
+    #         # filePath=str(outputDir / "tracksummary.root"),
+    #         filePath=str(outputDir / "tracksummary_gsf.root"),
+    #         writeGsfSpecific=True,
+    #     )
+    # )
+
+    # s.addWriter(
+    #     RootTrackFitterPerformanceWriter(
+    #         level=acts.logging.INFO,
+    #         inputTracks="tracks",
+    #         # inputParticles="particles_selected",
+    #         inputParticles="particles",
+    #         inputTrackParticleMatching="track_particle_matching",
+    #         # filePath=str(outputDir / "performance.root"),
+    #         filePath=str(outputDir / "performance_gsf.root"),
+    #     )
+    # )
 
     return s, perfWriter
 
@@ -754,21 +1508,30 @@ if __name__ == "__main__":
     # sys.exit(0)
 
     if args.odd:
-        geoDir = getOpenDataDetectorDirectory()
-        oddMaterialMap = (
-            args.material_config
-            if args.material_config
-            else geoDir / "data/odd-material-maps.root"
-        )
-        oddMaterialDeco = acts.IMaterialDecorator.fromFile(oddMaterialMap)
-        detector = getOpenDataDetector(
-            odd_dir=geoDir, materialDecorator=oddMaterialDeco
-        )
-        digiConfigFile = (
-            getOpenDataDetectorDirectory() / "config/odd-digi-smearing-config.json"
-        )
-        geoSelectionConfigFile = (
+        # geoDir = getOpenDataDetectorDirectory()
+        # oddMaterialMap = (
+        #     args.material_config
+        #     if args.material_config
+        #     else geoDir / "data/odd-material-maps.root"
+        # )
+        # oddMaterialDeco = acts.IMaterialDecorator.fromFile(oddMaterialMap)
+        # detector = getOpenDataDetector(
+        #     odd_dir=geoDir, materialDecorator=oddMaterialDeco
+        # )
+        # digiConfigFile = (
+        #     getOpenDataDetectorDirectory() / "config/odd-digi-smearing-config.json"
+        # )
+        stripGeoSelectionConfigFile = (
             actsSrcDir / "Examples/Configs/odd-strip-spacepoint-selection.json"
+        )
+        oddSeedingSel = actsSrcDir / "Examples/Configs/odd-seeding-config.json"
+        geoSelectionConfigFile = oddSeedingSel
+
+        detector = getOpenDataDetector()
+        digiConfigFile = (
+            # getOpenDataDetectorDirectory() / "config/odd-digi-smearing-config.json"
+            actsSrcDir
+            / "Examples/Configs/odd-digi-smearing-config.json"
         )
     else:
         detector = acts.examples.GenericDetector(acts.examples.GenericDetector.Config())
@@ -803,11 +1566,37 @@ if __name__ == "__main__":
         inputSimHitsPath = None
 
     # Simulate data on the go...
-    s, perfWriter = runTrackFindingPythonOnly(
+    # s, perfWriter = runTrackFindingPythonOnly(
+    #     trackingGeometry=trackingGeometry,
+    #     field=field,
+    #     digiConfigFile=digiConfigFile,
+    #     geoSelectionConfigFile=geoSelectionConfigFile,
+    #     outputDir=outputDir,
+    #     mlModelFile=mlModelFile,
+    #     inputParticlePath=inputParticlePath,
+    #     inputSimHitsPath=inputSimHitsPath,
+    #     decorators=decorators,
+    # )
+    # s.run()
+    # s, perfWriter = runOddTrackFinding(
+    # s = runOddGsfTrackFinding(
+    #     trackingGeometry=trackingGeometry,
+    #     field=field,
+    #     digiConfigFile=digiConfigFile,
+    #     geoSelectionConfigFile=geoSelectionConfigFile,
+    #     stripGeoSelectionConfigFile=stripGeoSelectionConfigFile,
+    #     outputDir=outputDir,
+    #     mlModelFile=mlModelFile,
+    #     inputParticlePath=inputParticlePath,
+    #     inputSimHitsPath=inputSimHitsPath,
+    #     decorators=decorators,
+    # )
+    s, perfWriter = runOddMlTrackFinding(
         trackingGeometry=trackingGeometry,
         field=field,
         digiConfigFile=digiConfigFile,
         geoSelectionConfigFile=geoSelectionConfigFile,
+        stripGeoSelectionConfigFile=stripGeoSelectionConfigFile,
         outputDir=outputDir,
         mlModelFile=mlModelFile,
         inputParticlePath=inputParticlePath,
@@ -829,6 +1618,7 @@ if __name__ == "__main__":
     # )
 
     s.run()
+    # sys.exit(0)
 
     print(perfWriter.histograms().keys())
     fig, ax = plt.subplots()
