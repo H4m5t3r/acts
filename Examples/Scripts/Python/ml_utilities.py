@@ -79,9 +79,13 @@ class DataHandler:
         print("DataHandler outlier roof: {}".format(self.outlier_roof))
         self.train_data_dirs = train_data_dirs
         self.poca_columns = ["d0", "z0", "phi", "theta", "q_over_p"]
+        input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
+        output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
+        # input_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/input_scaler_FEATURE_NAMES.pkl"
+        # output_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/output_scaler_FEATURE_NAMES.pkl"
+        # input_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/input_scaler.pkl"
+        # output_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/output_scaler.pkl"
         if load_data_scalers:
-            input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
-            output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
             try:
                 print("Trying to load data scalers from previous runs...")
                 self.input_scaler = self.loadScaler(input_scaler_path)
@@ -98,6 +102,8 @@ class DataHandler:
         else:
             self.input_scaler = self.createInputScaler()
             self.output_scaler = self.createParameterOutputScaler()
+            self.saveScaler(self.input_scaler, input_scaler_path)
+            self.saveScaler(self.output_scaler, output_scaler_path)
 
     def loadScaler(self, scaler_path):
         return joblib.load(scaler_path)
@@ -138,7 +144,8 @@ class DataHandler:
                 "DataHandler.createSuccessfulD0Z0Ids: data_dir or tracksummary_tree must be provided"
             )
         if tracksummary_tree is None:
-            file_path = os.path.join(data_dir, "tracksummary_gsf.root")
+            file_path = os.path.join(data_dir, "tracksummary.root")
+            # file_path = os.path.join(data_dir, "tracksummary_gsf.root")
             tracksummary_tree = self.readRootTree(file_path, "tracksummary")
 
         # Event ids
@@ -442,7 +449,8 @@ class DataHandler:
         for data_dir in self.train_data_dirs:
             measurement_df = self.createMeasurementDfPOCA(data_dir)
             measurement_df = measurement_df[input_columns_to_normalize]
-            input_scaler.partial_fit(measurement_df)
+            measurement_array = measurement_df.to_numpy()
+            input_scaler.partial_fit(measurement_array)
         print("Columns used for output scaling:", input_columns_to_normalize)
         return input_scaler
 
@@ -453,7 +461,9 @@ class DataHandler:
         for particle_df in [
             self.createPOCAParameterDf(data_dir) for data_dir in self.train_data_dirs
         ]:
-            output_scaler.partial_fit(particle_df[output_columns_to_normalize])
+            particle_df = particle_df[output_columns_to_normalize]
+            particle_df = particle_df.to_numpy()
+            output_scaler.partial_fit(particle_df)
         print("Columns used for output scaling:", output_columns_to_normalize)
         return output_scaler
 
