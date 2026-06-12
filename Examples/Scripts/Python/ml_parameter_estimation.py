@@ -117,7 +117,7 @@ def runMlTrackFinding(
         RootTrackFitterPerformanceWriter,
     )
 
-    from regressor_models import MLP, printModelSummary
+    from regressor_models import MLP
 
     s = s or acts.examples.Sequencer(
         events=args.n_events, numThreads=-1, logLevel=acts.logging.INFO
