@@ -95,12 +95,6 @@ class DataHandler:
         print("DataHandler outlier roof: {}".format(self.outlier_roof))
         self.train_data_dirs = train_data_dirs
         self.poca_columns = ["d0", "z0", "phi", "theta", "q_over_p"]
-        input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
-        output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
-        # input_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/input_scaler_FEATURE_NAMES.pkl"
-        # output_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/output_scaler_FEATURE_NAMES.pkl"
-        # input_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/input_scaler.pkl"
-        # output_scaler_path = "/home/taleiko/Documents/CERN/Doktorsstudier/Program/phd_code/data_scalers/output_scaler.pkl"
         if load_data_scalers:
             try:
                 print("Trying to load data scalers from previous runs...")
