@@ -31,7 +31,7 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from ml_utilities import (
+from utilities import (
     DataHandler,
 )
 

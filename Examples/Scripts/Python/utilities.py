@@ -11,7 +11,6 @@ import simulation_geometry as sg
 import uproot as ur
 import awkward as ak
 import pandas as pd
-from pathlib import Path
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -72,22 +71,7 @@ class EarlyStopping:
 
 
 class DataHandler:
-    def __init__(
-        self,
-        train_data_dirs: list = [],
-        load_data_scalers: bool = True,
-        input_scaler_path: Path = None,
-        output_scaler_path: Path = None,
-    ):
-        if load_data_scalers:
-            if not (input_scaler_path and output_scaler_path):
-                sys.exit(
-                    "ERROR: input_scaler_path and output_scaler_path must be set if load_data_scalers is True."
-                )
-        elif len(train_data_dirs) == 0:
-            sys.exit(
-                "ERROR: train_data_dirs must contain data directories if load_data_scalers is True."
-            )
+    def __init__(self, train_data_dirs: list, load_data_scalers: bool = False):
         self.outlier_floor = 8
         # Setting
         self.outlier_roof = 20
@@ -234,41 +218,48 @@ class DataHandler:
 
     def createMeasurementDfPOCA(self, data_dir):
         print("Creating measurement df")
-        file_path = os.path.join(data_dir, "measurements.root")
+        file_path = os.path.join(data_dir, "root/measurements.root")
         measurements_tree = self.readRootTree(file_path, "measurements")
+
         non_outlier_mask = self.createInputOutlierMask(measurements_tree)
         non_nan_mask = self.createNonNanMeasMask(measurements_tree, data_dir)
-        mask = np.array(
+        indices = np.array(
             [
                 non_outlier and non_nan
                 for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)
             ]
         )
+
         global_coords = sg.localToGlobalCoordinateConversion(measurements_tree)
         measurements_df = pd.DataFrame(
             {
                 # NOTE: Changing the event nr column name for consistency
                 "event_id": ak.to_numpy(
-                    measurements_tree["event_nr"].array()[mask]
+                    measurements_tree["event_nr"].array()[indices]
                 ).squeeze(),
                 "volume_id": ak.to_numpy(
-                    measurements_tree["volume_id"].array()[mask]
+                    measurements_tree["volume_id"].array()[indices]
                 ).squeeze(),
                 "rec_loc0": ak.to_numpy(
-                    measurements_tree["rec_loc0"].array()[mask]
+                    measurements_tree["rec_loc0"].array()[indices]
                 ).squeeze(),
                 "rec_loc1": ak.to_numpy(
-                    measurements_tree["rec_loc1"].array()[mask]
+                    measurements_tree["rec_loc1"].array()[indices]
                 ).squeeze(),
-                "global_x": global_coords[:, 0][mask],
-                "global_y": global_coords[:, 1][mask],
-                "global_z": global_coords[:, 2][mask],
+                "global_x": global_coords[:, 0][indices],
+                "global_y": global_coords[:, 1][indices],
+                "global_z": global_coords[:, 2][indices],
             }
         )
+        # For debugging: comparison with particle_df
+        # orig_ids = set(ak.to_numpy(measurements_tree["event_nr"].array()[indices]).squeeze())
+        # incl_ids = set(measurements_df.event_id)
+        # filtered_out_ids = orig_ids - incl_ids
+        # print("Filtered out MEASUREMENT IDs:\n", list(filtered_out_ids))
         return measurements_df
 
     def findNonOutlierEventIds(self, data_dir):
-        file_path = os.path.join(data_dir, "measurements.root")
+        file_path = os.path.join(data_dir, "root/measurements.root")
         measurements_tree = self.readRootTree(file_path, "measurements")
         event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
         unique_ids, counts = np.unique(event_ids, return_counts=True)
