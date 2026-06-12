@@ -111,6 +111,7 @@ def runMlTrackFinding(
     from acts.examples.reconstruction import (
         addSeeding,
         SeedingAlgorithm,
+        TrackSmearingSigmas,
         addTruthTrackingGsf,
     )
     from acts.examples.root import (
@@ -221,6 +222,7 @@ def runMlTrackFinding(
     # GSF (reference)
     #####################
 
+    # 2025
     addSeeding(
         s,
         trackingGeometry,
@@ -230,6 +232,40 @@ def runMlTrackFinding(
         seedingAlgorithm=SeedingAlgorithm.TruthSmeared,
         particleHypothesis=acts.ParticleHypothesis.electron,
     )
+    # 2026
+    # addSeeding(
+    #     s,
+    #     trackingGeometry,
+    #     field,
+    #     rnd=rnd,
+    #     inputParticles="particles_generated",
+    #     seedingAlgorithm=SeedingAlgorithm.TruthSmeared,
+    #     trackSmearingSigmas=TrackSmearingSigmas(
+    #         # zero everything so the GSF has a chance to find the measurements
+    #         loc0=0,
+    #         loc0PtA=0,
+    #         loc0PtB=0,
+    #         loc1=0,
+    #         loc1PtA=0,
+    #         loc1PtB=0,
+    #         time=0,
+    #         phi=0,
+    #         theta=0,
+    #         ptRel=0,
+    #     ),
+    #     particleHypothesis=acts.ParticleHypothesis.electron,
+    #     initialSigmas=[
+    #         1 * u.mm,
+    #         1 * u.mm,
+    #         1 * u.degree,
+    #         1 * u.degree,
+    #         0 / u.GeV,
+    #         1 * u.ns,
+    #     ],
+    #     initialSigmaQoverPt=0.1 / u.GeV,
+    #     initialSigmaPtRel=0.1,
+    #     initialVarInflation=[1e0, 1e0, 1e0, 1e0, 1e0, 1e0],
+    # )
 
     addTruthTrackingGsf(
         s,
@@ -495,7 +531,7 @@ if __name__ == "__main__":
         inputSimHitsPath = None
 
     #######################################################
-    # REMOVE IN SHIPPING
+    # TODO: REMOVE IN SHIPPING
     input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
     output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
     tech_acts_dir = "/home/taleiko/Documents/CERN/Technical_Student/Program/acts"
