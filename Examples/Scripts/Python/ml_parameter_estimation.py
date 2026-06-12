@@ -481,7 +481,8 @@ if __name__ == "__main__":
     decorators = detector.contextDecorators()
     field = acts.ConstantBField(acts.Vector3(0.0, 0.0, 2.0 * u.T))
 
-    outputDir = Path.cwd() / "output_ml" / "inference"
+    outputDir = Path.cwd() / "ml_data" / "inference"
+    outputDir.mkdir(exist_ok=True)
     mlModelFile = Path(
         "/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/ml_plugins"
     )
@@ -501,8 +502,9 @@ if __name__ == "__main__":
     train_data_dirs = [
         Path(
             os.path.join(
-                srcdir,
-                "ml_data/mega_data_{}".format(str(num)),
+                outputDir,
+                # TODO: Make some naming convention for the data directories
+                "ml_data/training/mega_data_{}".format(str(num)),
             )
             for num in [0, 1]
         )
