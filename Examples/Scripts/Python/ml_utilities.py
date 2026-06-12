@@ -89,7 +89,6 @@ class DataHandler:
                 "ERROR: train_data_dirs must contain data directories if load_data_scalers is True."
             )
         self.outlier_floor = 8
-        # Setting
         self.outlier_roof = 20
         print("DataHandler outlier floor: {}".format(self.outlier_floor))
         print("DataHandler outlier roof: {}".format(self.outlier_roof))

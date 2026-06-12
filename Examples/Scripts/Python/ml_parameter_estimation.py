@@ -49,15 +49,15 @@ parser.add_argument(
 parser.add_argument(
     "--n-events",
     help="Set the number of events to be simulated if data is not read",
-    default=1,
     type=int,
+    default=1,
 )
 parser.add_argument(
     "--mode",
-    help="Set the simulation mode",
-    choices=["fatras", "geant4"],
-    default="geant4",
+    help='Set the simulation type to "fatras" or "geant4"',
+    choices=("fatras", "geant4"),
     type=str,
+    default="geant4",
 )
 parser.add_argument(
     "--odd",
@@ -74,8 +74,8 @@ parser.add_argument(
 parser.add_argument(
     "--random-seed",
     help="Set the random seed for data generation",
-    default=42,
     type=int,
+    default=42,
 )
 args = parser.parse_args()
 
