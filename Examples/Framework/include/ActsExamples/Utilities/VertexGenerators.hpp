@@ -226,7 +226,6 @@ struct UniformD0Z0PrimaryVertexPositionGenerator
     double z0 = z0Min + u01(rng) * (z0Max - z0Min);
     double phi = -std::numbers::pi + u01(rng) * (2.0 * std::numbers::pi);
 
-    // ÄR DET HÄR I GRADER ELLER RADIANER?
     double x = -d0 * std::sin(phi);
     double y = d0 * std::cos(phi);
 
