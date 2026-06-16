@@ -430,6 +430,17 @@ void addGenerators(py::module& mex) {
            }),
            py::arg("mean"))
       .def_readwrite("mean", &PoissonMultiplicityGenerator::mean);
+
+  py::class_<UniformD0Z0PrimaryVertexPositionGenerator,
+             PrimaryVertexPositionGenerator,
+             std::shared_ptr<UniformD0Z0PrimaryVertexPositionGenerator>>(
+      mex, "UniformD0Z0VertexGenerator")
+      .def(py::init<>())
+      .def_readwrite("d0Min", &UniformD0Z0PrimaryVertexPositionGenerator::d0Min)
+      .def_readwrite("d0Max", &UniformD0Z0PrimaryVertexPositionGenerator::d0Max)
+      .def_readwrite("z0Min", &UniformD0Z0PrimaryVertexPositionGenerator::z0Min)
+      .def_readwrite("z0Max",
+                     &UniformD0Z0PrimaryVertexPositionGenerator::z0Max);
 }
 
 }  // namespace ActsPython

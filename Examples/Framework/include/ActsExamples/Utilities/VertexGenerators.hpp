@@ -212,4 +212,26 @@ struct LumiBlockRotationVertexPositionGenerator
   }
 };
 
+struct UniformD0Z0PrimaryVertexPositionGenerator
+    : public PrimaryVertexPositionGenerator {
+  double d0Min = 0.0;
+  double d0Max = 0.0;
+  double z0Min = 0.0;
+  double z0Max = 0.0;
+
+  Acts::Vector4 operator()(RandomEngine& rng,
+                           std::size_t /*eventNumber*/) const override {
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    double d0 = d0Min + u01(rng) * (d0Max - d0Min);
+    double z0 = z0Min + u01(rng) * (z0Max - z0Min);
+    double phi = -std::numbers::pi + u01(rng) * (2.0 * std::numbers::pi);
+
+    // ÄR DET HÄR I GRADER ELLER RADIANER?
+    double x = -d0 * std::sin(phi);
+    double y = d0 * std::cos(phi);
+
+    return Acts::Vector4(x, y, z0, 0.0);
+  }
+};
+
 }  // namespace ActsExamples
