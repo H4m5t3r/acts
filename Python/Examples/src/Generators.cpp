@@ -15,6 +15,7 @@
 #include "ActsExamples/EventData/SimParticle.hpp"
 #include "ActsExamples/Generators/EventGenerator.hpp"
 #include "ActsExamples/Utilities/ParametricParticleGenerator.hpp"
+#include "ActsExamples/Utilities/UniformThetaQOverPParticleGenerator.hpp"
 #include "ActsExamples/Utilities/VertexGenerators.hpp"
 #include "ActsFatras/EventData/Hit.hpp"
 #include "ActsPython/Utilities/Macros.hpp"
@@ -407,6 +408,55 @@ void addGenerators(py::module& mex) {
             });
   }
 
+  // Expose UniformThetaQOverPParticleGenerator
+  {
+    using Config = UniformThetaQOverPParticleGenerator::Config;
+    auto gen =
+        py::class_<UniformThetaQOverPParticleGenerator, ParticlesGenerator,
+                   std::shared_ptr<UniformThetaQOverPParticleGenerator>>(
+            mex, "UniformThetaQOverPParticleGenerator")
+            .def(py::init<const Config&>());
+
+    py::class_<Config>(gen, "Config")
+        .def(py::init<>())
+        .def_readwrite("phiMin", &Config::phiMin)
+        .def_readwrite("phiMax", &Config::phiMax)
+        .def_readwrite("thetaMin", &Config::thetaMin)
+        .def_readwrite("thetaMax", &Config::thetaMax)
+        .def_readwrite("pMin", &Config::pMin)
+        .def_readwrite("pMax", &Config::pMax)
+        .def_readwrite("pTransverse", &Config::pTransverse)
+        .def_readwrite("pLogUniform", &Config::pLogUniform)
+        .def_readwrite("qOverPUniform", &Config::qOverPUniform)
+        .def_readwrite("qOverPMin", &Config::qOverPMin)
+        .def_readwrite("qOverPMax", &Config::qOverPMax)
+        .def_readwrite("pdg", &Config::pdg)
+        .def_readwrite("randomizeCharge", &Config::randomizeCharge)
+        .def_readwrite("numParticles", &Config::numParticles)
+        .def_readwrite("mass", &Config::mass)
+        .def_readwrite("charge", &Config::charge)
+        .def_property(
+            "p", [](Config& cfg) { return std::pair{cfg.pMin, cfg.pMax}; },
+            [](Config& cfg, std::pair<double, double> value) {
+              cfg.pMin = value.first;
+              cfg.pMax = value.second;
+            })
+        .def_property(
+            "phi",
+            [](Config& cfg) { return std::pair{cfg.phiMin, cfg.phiMax}; },
+            [](Config& cfg, std::pair<double, double> value) {
+              cfg.phiMin = value.first;
+              cfg.phiMax = value.second;
+            })
+        .def_property(
+            "theta",
+            [](Config& cfg) { return std::pair{cfg.thetaMin, cfg.thetaMax}; },
+            [](Config& cfg, std::pair<double, double> value) {
+              cfg.thetaMin = value.first;
+              cfg.thetaMax = value.second;
+            });
+  }
+
   py::class_<FixedMultiplicityGenerator, MultiplicityGenerator,
              std::shared_ptr<FixedMultiplicityGenerator>>(
       mex, "FixedMultiplicityGenerator")
@@ -436,8 +486,8 @@ void addGenerators(py::module& mex) {
              std::shared_ptr<UniformD0Z0PrimaryVertexPositionGenerator>>(
       mex, "UniformD0Z0VertexGenerator")
       .def(py::init<>())
-      .def_readwrite("d0Min", &UniformD0Z0PrimaryVertexPositionGenerator::d0Min)
-      .def_readwrite("d0Max", &UniformD0Z0PrimaryVertexPositionGenerator::d0Max)
+      .def_readwrite("rMin", &UniformD0Z0PrimaryVertexPositionGenerator::rMin)
+      .def_readwrite("rMax", &UniformD0Z0PrimaryVertexPositionGenerator::rMax)
       .def_readwrite("z0Min", &UniformD0Z0PrimaryVertexPositionGenerator::z0Min)
       .def_readwrite("z0Max",
                      &UniformD0Z0PrimaryVertexPositionGenerator::z0Max);

@@ -2,6 +2,7 @@ from typing import Optional, Union, Any, List
 from pathlib import Path
 from collections import namedtuple
 from collections.abc import Iterable
+import math
 
 import acts
 import acts.examples
@@ -44,6 +45,35 @@ ParticleConfig = namedtuple(
     ["num", "pdg", "randomizeCharge", "charge", "mass"],
     defaults=[None, None, None, None, None],
 )
+
+
+# This helper normalizes the old Python ParticleConfig and the C++
+# UniformThetaQOverPParticleGenerator.Config object.
+def _normalize_uniform_particle_config(particleConfig: Any) -> dict:
+    return {
+        "numParticles": getattr(particleConfig, "num", None)
+        or getattr(particleConfig, "numParticles", 1),
+        "pdg": getattr(particleConfig, "pdg", None),
+        "randomizeCharge": getattr(particleConfig, "randomizeCharge", None),
+        "charge": getattr(particleConfig, "charge", None),
+        "mass": getattr(particleConfig, "mass", None),
+        "qOverPUniform": getattr(particleConfig, "qOverPUniform", True),
+        "qOverPMin": getattr(
+            particleConfig, "qOverPMin", -0.5 / acts.UnitConstants.GeV
+        ),
+        "qOverPMax": getattr(particleConfig, "qOverPMax", 0.5 / acts.UnitConstants.GeV),
+        "thetaMin": getattr(particleConfig, "thetaMin", None),
+        "thetaMax": getattr(particleConfig, "thetaMax", None),
+        "phiMin": getattr(particleConfig, "phiMin", None),
+        "phiMax": getattr(particleConfig, "phiMax", None),
+    }
+
+
+def _theta_from_eta(eta: float) -> float:
+    """Convert pseudorapidity to polar angle theta."""
+    return 2.0 * math.atan(math.exp(-eta))
+
+
 ParticleSelectorConfig = namedtuple(
     "ParticleSelectorConfig",
     [
@@ -194,6 +224,156 @@ def addParticleGun(
                         mass=particleConfig.mass,
                         # Merging particle gun vertices does not make sense
                     )
+                ),
+            )
+        ],
+        randomNumbers=rnd,
+        outputEvent="particle_gun_event",
+    )
+    s.addReader(evGen)
+
+    hepmc3Converter = acts.examples.hepmc3.HepMC3InputConverter(
+        level=customLogLevel(),
+        inputEvent=evGen.config.outputEvent,
+        outputParticles="particles_generated",
+        outputVertices="vertices_generated",
+        mergePrimaries=False,
+    )
+    s.addAlgorithm(hepmc3Converter)
+
+    s.addWhiteboardAlias("particles", hepmc3Converter.config.outputParticles)
+    s.addWhiteboardAlias("vertices_truth", hepmc3Converter.config.outputVertices)
+
+    s.addWhiteboardAlias(
+        "particles_generated_selected", hepmc3Converter.config.outputParticles
+    )
+
+    if printParticles:
+        s.addAlgorithm(
+            ParticlesPrinter(
+                level=customLogLevel(),
+                inputParticles=hepmc3Converter.config.outputParticles,
+            )
+        )
+
+    if outputDirCsv is not None:
+        outputDirCsv = Path(outputDirCsv)
+        if not outputDirCsv.exists():
+            outputDirCsv.mkdir()
+
+        s.addWriter(
+            CsvParticleWriter(
+                level=customLogLevel(),
+                inputParticles=hepmc3Converter.config.outputParticles,
+                outputDir=str(outputDirCsv),
+                outputStem="particles",
+            )
+        )
+
+    if outputDirRoot is not None:
+        assert (
+            ACTS_EXAMPLES_ROOT_AVAILABLE
+        ), "ROOT output requested but ROOT is not available"
+        outputDirRoot = Path(outputDirRoot)
+        if not outputDirRoot.exists():
+            outputDirRoot.mkdir()
+
+        s.addWriter(
+            RootParticleWriter(
+                level=customLogLevel(),
+                inputParticles=hepmc3Converter.config.outputParticles,
+                filePath=str(outputDirRoot / "particles.root"),
+            )
+        )
+
+        s.addWriter(
+            RootVertexWriter(
+                level=customLogLevel(),
+                inputVertices=hepmc3Converter.config.outputVertices,
+                filePath=str(outputDirRoot / "vertices.root"),
+            )
+        )
+
+    return s
+
+
+def addUniform(
+    s: acts.examples.Sequencer,
+    outputDirCsv: Optional[Union[Path, str]] = None,
+    outputDirRoot: Optional[Union[Path, str]] = None,
+    momentumConfig: MomentumConfig = MomentumConfig(),
+    etaConfig: EtaConfig = EtaConfig(),
+    phiConfig: PhiConfig = PhiConfig(),
+    particleConfig: Any = ParticleConfig(),
+    multiplicity: int = 1,
+    vtxGen: Optional[EventGenerator.VertexGenerator] = None,
+    printParticles: bool = False,
+    rnd: Optional[RandomNumbers] = None,
+    logLevel: Optional[acts.logging.Level] = None,
+) -> None:
+    """This function steers particle generation using the custom uniform generator.
+
+    Parameters
+    ----------
+    s: Sequencer
+        the sequencer module to which we add the particle generation steps
+    outputDirCsv : Path|str, path, None
+        the output folder for the Csv output, None triggers no output
+    outputDirRoot : Path|str, path, None
+        the output folder for the Root output, None triggers no output
+    momentumConfig : MomentumConfig(min, max, transverse, logUniform)
+        momentum configuration: minimum momentum, maximum momentum, transverse, log-uniform
+    etaConfig : EtaConfig(min, max, uniform)
+        pseudorapidity configuration: eta min, eta max, uniform
+    phiConfig : PhiConfig(min, max)
+        azimuthal angle configuration: phi min, phi max
+    particleConfig : ParticleConfig(num, pdg, randomizeCharge, charge, mass)
+        particle configuration: number of particles, particle type, charge flip
+    multiplicity : int, 1
+        number of generated vertices
+    vtxGen : VertexGenerator, None
+        vertex generator module
+    printParticles : bool, False
+        print generated particles
+    rnd : RandomNumbers, None
+        random number generator
+    """
+
+    customLogLevel = acts.examples.defaultLogging(s, logLevel)
+    rnd = rnd or RandomNumbers(seed=228)
+
+    normalizedConfig = _normalize_uniform_particle_config(particleConfig)
+    theta_kwargs = {}
+    if etaConfig.min is not None and etaConfig.max is not None:
+        theta_kwargs["theta"] = (
+            _theta_from_eta(etaConfig.min),
+            _theta_from_eta(etaConfig.max),
+        )
+    particle_kwargs = {
+        "p": (momentumConfig.min, momentumConfig.max),
+        "pTransverse": momentumConfig.transverse,
+        "pLogUniform": momentumConfig.logUniform,
+        "phi": (phiConfig.min, phiConfig.max),
+        **theta_kwargs,
+        **normalizedConfig,
+    }
+
+    # Remove values that are not set explicitly so defaultKWArgs can
+    # properly drop None entries and preserve generator defaults.
+    particle_kwargs = {k: v for k, v in particle_kwargs.items() if v is not None}
+
+    evGen = EventGenerator(
+        level=customLogLevel(),
+        generators=[
+            EventGenerator.Generator(
+                multiplicity=FixedMultiplicityGenerator(n=multiplicity),
+                vertex=vtxGen
+                or acts.examples.GaussianVertexGenerator(
+                    mean=acts.Vector4(0, 0, 0, 0),
+                    stddev=acts.Vector4(0, 0, 0, 0),
+                ),
+                particles=acts.examples.UniformThetaQOverPParticleGenerator(
+                    **acts.examples.defaultKWArgs(**particle_kwargs)
                 ),
             )
         ],

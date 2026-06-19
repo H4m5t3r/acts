@@ -29,10 +29,10 @@ parser.add_argument(
     action=argparse.BooleanOptionalAction,
 )
 parser.add_argument(
-    "--n_events",
+    "--n-events",
     help="Set the number of events to be simulated",
     type=int,
-    default=10000,
+    default=100,
 )
 parser.add_argument(
     "--mode",
@@ -42,13 +42,13 @@ parser.add_argument(
     default="geant4",
 )
 parser.add_argument(
-    "--output_dir",
+    "--output-dir",
     help="Set a custom output directory",
     type=Path,
     default=Path.cwd() / "ml_data" / "training",
 )
 parser.add_argument(
-    "--random_seed",
+    "--random-seed",
     help="Set the random seed for the simulation",
     type=int,
     default=42,
@@ -57,6 +57,7 @@ args = parser.parse_args()
 
 
 def runMlDataGeneration(
+    detector: acts.examples.DetectorBase,
     trackingGeometry: acts.TrackingGeometry,
     field: acts.MagneticFieldProvider,
     digiConfigFile: Path,
@@ -90,8 +91,11 @@ def runMlDataGeneration(
         RootTrackFitterPerformanceWriter,
     )
 
+    # outputDir.mkdir(exist_ok=True)
+    os.makedirs(outputDir, exist_ok=True)
+
     s = s or acts.examples.Sequencer(
-        events=100, numThreads=1, logLevel=acts.logging.INFO
+        events=args.n_events, numThreads=1, logLevel=acts.logging.INFO
     )
 
     for d in decorators:
@@ -100,8 +104,6 @@ def runMlDataGeneration(
     rnd = acts.examples.RandomNumbers(seed=42)
     outputDir = Path(outputDir)
     logger = acts.getDefaultLogger("ML Data Generation Example", acts.logging.INFO)
-
-    outputDir.mkdir(exist_ok=True)
 
     if inputParticlePath is None:
         addParticleGun(
@@ -293,8 +295,41 @@ if __name__ == "__main__":
     outputDir = Path.cwd() / "ml_data" / "training"
 
     runMlDataGeneration(
+        detector=detector,
         trackingGeometry=trackingGeometry,
         field=field,
         digiConfigFile=digiConfigFile,
         outputDir=outputDir,
     ).run()
+
+    ################################################
+    # REMOVE IN PRODUCTION
+    # from ml_utilities import (
+    #     DataHandler,
+    #     Evaluator,
+    # )
+
+    # input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
+    # output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
+
+    # dh = DataHandler(
+    #     train_data_dirs=[outputDir],
+    #     load_data_scalers=True,
+    #     input_scaler_path=input_scaler_path,
+    #     output_scaler_path=output_scaler_path,
+    # )
+
+    # ev = Evaluator(
+    #     20 * 3,
+    #     dh.getInputScaler(),
+    #     dh.getOutputScaler(),
+    #     dh,
+    # )
+    # ev.plotDistributions(
+    #     data_dir=outputDir,
+    #     model=None,
+    #     is_transformer=False,
+    #     distr_base_path=outputDir,
+    # )
+
+    ################################################

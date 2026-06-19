@@ -40,3 +40,12 @@ codegen/src/codegen.egg-info/
 !.clang-tidy
 !.oclint
 !.devcontainer
+
+/build-main
+/build-dev
+/testing
+/test_output
+/test_data
+/ml_data
+/ml_output
+/output_track_finding_python_only

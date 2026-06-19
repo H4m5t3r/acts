@@ -1923,6 +1923,7 @@ def runMlDataGeneration(
 ):
     from acts.examples.simulation import (
         addParticleGun,
+        addUniform,
         ParticleConfig,
         EtaConfig,
         PhiConfig,
@@ -1976,24 +1977,102 @@ def runMlDataGeneration(
         #     outputDirCsv=outputDir / "csv",
         #     outputDirRoot=outputDir,
         # )
+
+        # "UNIFORM" (SAMPLING)
         vertexGen = acts.examples.UniformD0Z0VertexGenerator()
-        vertexGen.d0Min = -5.0 * u.mm
-        vertexGen.d0Max = 5.0 * u.mm
+        vertexGen.rMin = -5.0 * u.mm
+        vertexGen.rMax = 5.0 * u.mm
         vertexGen.z0Min = -150.0 * u.mm
         vertexGen.z0Max = 150.0 * u.mm
 
-        addParticleGun(
-            s,
-            ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
-            EtaConfig(-3.0, 3.0, uniform=True),
-            MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
-            PhiConfig(0.0, 360.0 * u.degree),
+        # addParticleGun(
+        #     s,
+        #     ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+        #     EtaConfig(-3.0, 3.0, uniform=True),
+        #     MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
+        #     PhiConfig(0.0, 360.0 * u.degree),
+        #     vtxGen=vertexGen,
+        #     multiplicity=1,
+        #     rnd=rnd,
+        #     outputDirCsv=outputDir / "csv",
+        #     outputDirRoot=outputDir / "root",
+        # )
+
+        # UTAN ATT ÄNDRA NÅT
+        # cfg = acts.examples.ParametricParticleGenerator.Config()
+        # cfg.phiMin = 0.0
+        # cfg.phiMax = 2.0 * np.pi
+        # cfg.thetaMin = 0.0
+        # cfg.thetaMax = np.pi
+        # cfg.etaUniform = False
+        # cfg.pMin = 1.0 * u.GeV
+        # cfg.pMax = 100.0 * u.GeV
+        # cfg.pTransverse = False
+        # cfg.pLogUniform = False
+        # cfg.pdg = acts.PdgParticle.eElectron
+        # cfg.randomizeCharge = True
+        # # cfg.qOverPUniform = True
+        # # cfg.qOverPMin = -0.5 / u.GeV
+        # # cfg.qOverPMax = 0.5 / u.GeV
+
+        # particle_gen = acts.examples.ParametricParticleGenerator(cfg)
+
+        # event_gen = acts.examples.EventGenerator(
+        #     acts.examples.EventGenerator.Config(
+        #         generators=[
+        #             acts.examples.EventGenerator.Generator(
+        #                 multiplicity=acts.examples.FixedMultiplicityGenerator(n=1),
+        #                 vertex=vertexGen,
+        #                 particles=particle_gen,
+        #             )
+        #         ],
+        #         randomNumbers=rnd,
+        #         outputEvent="particle_gun_event",
+        #     ),
+        #     acts.logging.INFO,
+        # )
+        # s.addReader(event_gen)
+
+        # UNIFORM THETA AND Q/P WITH CUSTOM PARTICLE GENERATOR
+        cfg = acts.examples.UniformThetaQOverPParticleGenerator.Config()
+        cfg.phiMin = 0.0
+        cfg.phiMax = 2.0 * np.pi
+        cfg.thetaMin = 0.0
+        cfg.thetaMax = np.pi
+        cfg.qOverPUniform = True
+        cfg.qOverPMin = -0.5 / u.GeV
+        cfg.qOverPMax = 0.5 / u.GeV
+        cfg.pdg = acts.PdgParticle.eElectron
+        cfg.randomizeCharge = False
+        cfg.numParticles = 1
+
+        addUniform(
+            s=s,
+            # ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+            etaConfig=EtaConfig(-3.0, 3.0, uniform=True),
+            momentumConfig=MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
+            phiConfig=PhiConfig(0.0, 360.0 * u.degree),
+            particleConfig=cfg,
             vtxGen=vertexGen,
             multiplicity=1,
             rnd=rnd,
             outputDirCsv=outputDir / "csv",
             outputDirRoot=outputDir / "root",
         )
+
+        # particle_gen = acts.examples.UniformThetaQOverPParticleGenerator(cfg)
+
+        # evcfg = acts.examples.EventGenerator.Config()
+        # evcfg.generators = [
+        #     acts.examples.EventGenerator.Generator(
+        #         multiplicity=acts.examples.FixedMultiplicityGenerator(n=1),
+        #         vertex=vertexGen,            # your vertex generator (or None -> default)
+        #         particles=particle_gen,
+        #     )
+        # ]
+        # evcfg.randomNumbers = rnd
+        # evGen = acts.examples.EventGenerator(evcfg, acts.logging.INFO)
+        # s.addReader(evGen)
     else:
         logger.info("Reading particles from {}", inputParticlePath.resolve())
         assert inputParticlePath.exists()

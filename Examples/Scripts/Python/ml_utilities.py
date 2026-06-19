@@ -498,11 +498,11 @@ class Evaluator:
     # Distribution plotting
     ##################################################
     def plotDistributions(self, data_dir, model, is_transformer, distr_base_path):
-        # self.plotTruthDistributions(data_dir, distr_base_path)
+        self.plotTruthDistributions(data_dir, distr_base_path)
         # self.plotGsfDistributions(data_dir, distr_base_path)
-        self.plotModelOutputDistributions(
-            model, data_dir, is_transformer, distr_base_path
-        )
+        # self.plotModelOutputDistributions(
+        #     model, data_dir, is_transformer, distr_base_path
+        # )
 
     def plotTruthDistributions(self, data_dir, distr_base_path):
         poca_df = self.data_handler.createPOCAParameterDf(data_dir)
@@ -518,7 +518,10 @@ class Evaluator:
         axes = [ax1, ax2, ax3, ax4, ax5]
         for i in range(len(self.titles)):
             data = poca_df[self.poca_columns[i]].to_numpy()
-            axes[i].hist(data, bins=50, color="skyblue", edgecolor="black")
+            if i == 4:
+                axes[i].hist(data, bins=250, color="skyblue", edgecolor="black")
+            else:
+                axes[i].hist(data, bins=50, color="skyblue", edgecolor="black")
             axes[i].set_title(self.titles[i])
             axes[i].set_xlabel(self.labels[i])
             axes[i].set_ylabel("Frequency")
