@@ -31,7 +31,7 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from ml_utilities import DataHandler, getMlpOutputs, getTransformerOutputs
+from ml_utilities import DataHandler
 
 MLP_MODEL_FILE = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
 TRANSFORMER_MODEL_FILE = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_transformer_1000e_128d_512f_4h_6l_0.001lr_1024b_0.1dr_1024mlp/mega_transformer_1000e_128d_512f_4h_6l_0.001lr_1024b_0.1dr_1024mlp.pt"
@@ -1747,7 +1747,6 @@ def runMlVsGsfTrackFinding(
                     self.model.load_state_dict(
                         torch.load(MLP_MODEL_FILE, map_location=device)
                     )
-                    self.modelOutputFunction = getMlpOutputs
                 case "transformer":
                     self.model = TransformerRegressor(
                         input_dim=3,
@@ -1763,7 +1762,6 @@ def runMlVsGsfTrackFinding(
                     self.model.load_state_dict(
                         torch.load(TRANSFORMER_MODEL_FILE, map_location=device)
                     )
-                    self.modelOutputFunction = getTransformerOutputs
             self.model.to(device)
 
         def execute(self, context):
@@ -2359,9 +2357,9 @@ if __name__ == "__main__":
     )
     # dataDir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_1/electron/geant4/train_2")
 
-    outputDir = Path.cwd() / "output_track_finding_python_only"
+    # outputDir = Path.cwd() / "output_track_finding_python_only"
     # outputDir = Path.cwd() / "output_track_finding_python_only" / "mega_data_9"
-    # outputDir = Path.cwd() / "output_track_finding_python_only" / "mega_data_96"
+    outputDir = Path.cwd() / "output_track_finding_python_only" / "mega_data_96"
     # outputDir = Path.cwd() / "output_track_finding_python_only" / "mini_data_9"
     outputDir.mkdir(exist_ok=True)
 
