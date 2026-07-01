@@ -31,9 +31,10 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from utilities import (
-    DataHandler,
-)
+from ml_utilities import DataHandler, getMlpOutputs, getTransformerOutputs
+
+MLP_MODEL_FILE = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
+TRANSFORMER_MODEL_FILE = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_transformer_1000e_128d_512f_4h_6l_0.001lr_1024b_0.1dr_1024mlp/mega_transformer_1000e_128d_512f_4h_6l_0.001lr_1024b_0.1dr_1024mlp.pt"
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -79,6 +80,13 @@ parser.add_argument(
     "--mode",
     help="Set the simulation mode",
     default="geant4",
+    type=str,
+)
+parser.add_argument(
+    "--model",
+    help="Set the NN model type",
+    choices=["mlp", "transformer"],
+    default="mlp",
     type=str,
 )
 args = parser.parse_args()
@@ -1230,7 +1238,6 @@ def runMlVsGsfTrackFinding(
     geoSelectionConfigFile,
     # stripGeoSelectionConfigFile,
     outputDir,
-    mlModelFile,
     detector,
     inputParticlePath: Optional[Path] = None,
     inputSimHitsPath: Optional[Path] = None,
@@ -1261,7 +1268,11 @@ def runMlVsGsfTrackFinding(
         RootTrackFitterPerformanceWriter,
     )
 
-    from regressor_models import MLP, printModelSummary
+    from regressor_models import (
+        MLP,
+        TransformerRegressor,
+        printModelSummary,
+    )
 
     # mode = "fatras"
     # mode = "geant4"
@@ -1315,7 +1326,8 @@ def runMlVsGsfTrackFinding(
         # events=n_events, numThreads=1, logLevel=acts.logging.INFO
         events=n_events,
         numThreads=1,
-        logLevel=acts.logging.DEBUG,
+        # logLevel=acts.logging.DEBUG,
+        logLevel=acts.logging.INFO,
     )
 
     for d in decorators:
@@ -1706,10 +1718,17 @@ def runMlVsGsfTrackFinding(
                 )
                 for num in range(10)
             ]
+            input_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/input_scaler.pkl"
+            output_scaler_path = "/home/taleiko/Documents/CERN/Technical_Student/Program/ml_model/output_scaler.pkl"
             # Glued together to work: Data directories not actually used here
             # NOTE: Now potential double data reading if new scalers are actually created
             # See earlier DataHandler
-            self.dh = DataHandler(train_data_dirs, load_data_scalers=True)
+            self.dh = DataHandler(
+                train_data_dirs,
+                load_data_scalers=True,
+                input_scaler_path=input_scaler_path,
+                output_scaler_path=output_scaler_path,
+            )
             self.input_scaler = self.dh.getInputScaler()
             self.output_scaler = self.dh.getOutputScaler()
 
@@ -1717,14 +1736,35 @@ def runMlVsGsfTrackFinding(
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             # self.mlp = MLP(input_dim=max_seq_len*3, output_dim=5, hidden_dim=32, n_hidden_layers=2)
-            self.mlp = MLP(
-                input_dim=self.max_seq_len * 3,
-                output_dim=5,
-                hidden_dim=256,
-                n_hidden_layers=7,
-            )
-            self.mlp.to(device)
-            self.mlp.load_state_dict(torch.load(mlModelFile, map_location=device))
+            match args.model:
+                case "mlp":
+                    self.model = MLP(
+                        input_dim=self.max_seq_len * 3,
+                        output_dim=5,
+                        hidden_dim=256,
+                        n_hidden_layers=7,
+                    )
+                    self.model.load_state_dict(
+                        torch.load(MLP_MODEL_FILE, map_location=device)
+                    )
+                    self.modelOutputFunction = getMlpOutputs
+                case "transformer":
+                    self.model = TransformerRegressor(
+                        input_dim=3,
+                        model_dim=128,
+                        num_heads=4,
+                        dim_feedforward=512,
+                        num_layers=6,
+                        output_dim=5,
+                        max_seq_len=20,
+                        dropout=0.1,
+                        mlp_width=1024,
+                    )
+                    self.model.load_state_dict(
+                        torch.load(TRANSFORMER_MODEL_FILE, map_location=device)
+                    )
+                    self.modelOutputFunction = getTransformerOutputs
+            self.model.to(device)
 
         def execute(self, context):
             prototracks = self.prototracks(context.eventStore)
@@ -1783,36 +1823,39 @@ def runMlVsGsfTrackFinding(
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     scaled_input = self.input_scaler.transform(ml_input)
-                # print(scaled_input)
                 scaled_input = np.flip(scaled_input, axis=0)
-                # print(scaled_input)
-                # print(scaled_input.shape)
-                # print(len(scaled_input))
                 pad_len = self.max_seq_len - len(scaled_input)
-                # print(self.max_seq_len)
-                # print(pad_len)
                 scaled_input = np.pad(
                     scaled_input, ((0, pad_len), (0, 0)), mode="constant"
                 )
                 scaled_input = scaled_input.flatten()
-                # print(scaled_input)
                 scaled_input = torch.tensor(scaled_input, dtype=torch.float32)
-                # print(scaled_input)
                 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 scaled_input.to(device)
 
-                # TODO: This is taped together at the moment. The scaler expects an array of columns. Note output[0] and array([output])
-                with torch.no_grad():
-                    scaled_output = np.array(
-                        [self.mlp(scaled_input).detach().cpu().numpy()]
-                    )
-                # print(scaled_output)
+                # TODO: The scaler expects an array of columns. Note output[0] and array([output])
+                match args.model:
+                    case "mlp":
+                        with torch.no_grad():
+                            scaled_output = np.array(
+                                [self.model(scaled_input).detach().cpu().numpy()]
+                            )
+                    case "transformer":
+                        scaled_input = scaled_input.reshape(1, self.max_seq_len, 3)
+                        mask = (scaled_input == 0).all(dim=2)
+                        train_mask_gpu = mask.to(device)
+                        with torch.no_grad():
+                            scaled_output = np.array(
+                                self.model(scaled_input, mask=train_mask_gpu)
+                                .detach()
+                                .cpu()
+                                .numpy()
+                            )
+                # The output scaler was trained with Pandas DataFrames with feature names
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     output = self.output_scaler.inverse_transform(scaled_output)
-                # print(output)
                 output = output[0]
-                # print(output)
 
                 track = container.makeTrack()
                 track.referenceSurface = self.perigeeSurface
@@ -1902,7 +1945,7 @@ def runMlVsGsfTrackFinding(
             # inputParticles="particles_generated_selected",
             inputTrackParticleMatching="track_particle_matching",
             # filePath=str(outputDir / "performance.root"),
-            filePath=str(outputDir / "performance_ml.root"),
+            filePath=str(outputDir / "performance_{}.root".format(args.model)),
             # resPlotToolConfig=resCfgMl,
         )
     )
@@ -2256,7 +2299,7 @@ def dataGeneration():
 
 
 if __name__ == "__main__":
-    dataGeneration()
+    # dataGeneration()
     # srcdir = Path(__file__).resolve().parent.parent.parent.parent
     # srcdir = Path(__file__).resolve().parent.parent / "Technical_student" / "Program" / "acts"
     # srcdir = Path(__file__).resolve() / "acts"
@@ -2310,17 +2353,16 @@ if __name__ == "__main__":
 
     field = acts.ConstantBField(acts.Vector3(0.0, 0.0, 2.0 * u.T))
 
-    mlModelFile = "/home/taleiko/Documents/CERN/Technical_Student/Resultat/mega_mlp_1000e_8h_256n_0.001lr_1024b/mega_mlp_1000e_8h_256n_0.001lr_1024b.pt"
     # dataDirs = ["/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"]
     dataDir = Path(
         "/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_0/electron/geant4/train_1"
     )
     # dataDir = Path("/home/taleiko/Documents/CERN/Doktorsstudier/Program/acts/test_data/test_data_1/electron/geant4/train_2")
 
-    # outputDir = Path.cwd() / "output_track_finding_python_only"
+    outputDir = Path.cwd() / "output_track_finding_python_only"
     # outputDir = Path.cwd() / "output_track_finding_python_only" / "mega_data_9"
     # outputDir = Path.cwd() / "output_track_finding_python_only" / "mega_data_96"
-    outputDir = Path.cwd() / "output_track_finding_python_only" / "mini_data_9"
+    # outputDir = Path.cwd() / "output_track_finding_python_only" / "mini_data_9"
     outputDir.mkdir(exist_ok=True)
 
     if args.read_data:
@@ -2375,7 +2417,6 @@ if __name__ == "__main__":
         geoSelectionConfigFile=geoSelectionConfigFile,
         # stripGeoSelectionConfigFile=stripGeoSelectionConfigFile,
         outputDir=outputDir,
-        mlModelFile=mlModelFile,
         detector=detector,
         inputParticlePath=inputParticlePath,
         inputSimHitsPath=inputSimHitsPath,
