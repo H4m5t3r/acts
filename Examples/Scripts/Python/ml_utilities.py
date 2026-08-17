@@ -16,6 +16,15 @@ from pathlib import Path
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
+def newBeamlines(lower, upper, points_in_xy, radius):
+    space = np.linspace(lower, upper, points_in_xy)
+    x, y = np.meshgrid(space, space, indexing="ij")
+    square_points = np.stack([x, y], axis=-1)
+    mask = np.linalg.norm(square_points, axis=-1) <= radius
+    circle_points = square_points[mask]
+    return circle_points
+
+
 class MlDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
