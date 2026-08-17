@@ -16,7 +16,7 @@ from pathlib import Path
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def newBeamlines(lower, upper, points_in_xy, radius):
+def newBeamspots(lower, upper, points_in_xy, radius):
     space = np.linspace(lower, upper, points_in_xy)
     x, y = np.meshgrid(space, space, indexing="ij")
     square_points = np.stack([x, y], axis=-1)
