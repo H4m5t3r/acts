@@ -18,6 +18,10 @@ from ml_utilities import (
     createRandomBeamspotAndTrackParameters,
 )
 
+LOWER = -29
+UPPER = 29
+N_POINTS_IN_XY = 40
+DISTRIBUTION_RADIUS = 25
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
@@ -540,19 +544,22 @@ class OrigoBeamspotTrainer(MlTrainer):
         test_targets_unscaled_list = []
 
         with torch.no_grad():
-            for X_test, y_test in test_loader:
-                X_test_gpu = X_test.to(self.device)
+            for X_test_batch, y_test in test_loader:
+                X_test_gpu = X_test_batch.to(self.device)
                 y_test_gpu = y_test.to(self.device)
                 test_outputs = self.getModelOutputs(
                     model, X_test_gpu, self.max_seq_len, self.device
                 )
                 tot_test_loss += (
-                    self.criterion(test_outputs, y_test_gpu).item() * X_test.shape[0]
+                    self.criterion(test_outputs, y_test_gpu).item()
+                    * X_test_batch.shape[0]
                 )
                 aver_unscaled_test_loss = self.getUnscaledLoss(
                     self.criterion, test_outputs, y_test_gpu
                 )
-                tot_test_loss_unscaled += aver_unscaled_test_loss * X_test.shape[0]
+                tot_test_loss_unscaled += (
+                    aver_unscaled_test_loss * X_test_batch.shape[0]
+                )
 
                 aver_ind_output_losses = self.getIndividualScaledLosses(
                     test_outputs, y_test_gpu
@@ -560,9 +567,9 @@ class OrigoBeamspotTrainer(MlTrainer):
                 aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
                     test_outputs, y_test_gpu
                 )
-                tot_ind_test_loss += aver_ind_output_losses * X_test.shape[0]
+                tot_ind_test_loss += aver_ind_output_losses * X_test_batch.shape[0]
                 tot_ind_test_loss_unscaled += (
-                    aver_ind_unscaled_output_losses * X_test.shape[0]
+                    aver_ind_unscaled_output_losses * X_test_batch.shape[0]
                 )
 
                 # collect unscaled preds/targets for variance ratios
@@ -630,14 +637,10 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
         )
 
-        lower = -29
-        upper = 29
-        n_points_in_xy = 40
-        distribution_radius = 25
         beamspots = createNewBeamspots(
-            lower, upper, n_points_in_xy, distribution_radius
+            LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
         )
-        distance_between_beamspots = (upper - lower) / n_points_in_xy
+        distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY
 
         print("Starting training loop")
         for epoch in range(self.n_epochs):
@@ -788,3 +791,101 @@ class ArbitraryBeamspotTrainer(MlTrainer):
 
         early_stopper.load_best_model(model)
         return model
+
+    def test(self, model, X_test, test_params):
+        model.eval()
+        test_dataset = MlDataset(X_test, test_params)
+        test_loader = DataLoader(
+            test_dataset, batch_size=self.batch_size, shuffle=False
+        )
+
+        tot_test_loss = 0.0
+        tot_test_loss_unscaled = 0.0
+        tot_ind_test_loss = np.full(5, 0.0, dtype=np.float32)
+        tot_ind_test_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+
+        test_preds_unscaled_list = []
+        test_targets_unscaled_list = []
+
+        beamspots = createNewBeamspots(
+            LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
+        )
+        distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY
+
+        with torch.no_grad():
+            for X_test_batch, params_test_batch in test_loader:
+                y_batch = createRandomBeamspotAndTrackParameters(
+                    beamspots,
+                    params_test_batch,
+                    noise_scale=distance_between_beamspots / 2,
+                )
+                X_test_gpu = X_test_batch.to(self.device)
+                y_test_gpu = y_batch.to(self.device)
+                test_outputs = self.getModelOutputs(
+                    model, X_test_gpu, self.max_seq_len, self.device
+                )
+                tot_test_loss += (
+                    self.criterion(test_outputs, y_test_gpu).item()
+                    * X_test_batch.shape[0]
+                )
+                aver_unscaled_test_loss = self.getUnscaledLoss(
+                    self.criterion, test_outputs, y_test_gpu
+                )
+                tot_test_loss_unscaled += (
+                    aver_unscaled_test_loss * X_test_batch.shape[0]
+                )
+
+                aver_ind_output_losses = self.getIndividualScaledLosses(
+                    test_outputs, y_test_gpu
+                )
+                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
+                    test_outputs, y_test_gpu
+                )
+                tot_ind_test_loss += aver_ind_output_losses * X_test_batch.shape[0]
+                tot_ind_test_loss_unscaled += (
+                    aver_ind_unscaled_output_losses * X_test_batch.shape[0]
+                )
+
+                # collect unscaled preds/targets for variance ratios
+                pred_unscaled_t, y_unscaled_t = self._unscale_tensors(
+                    test_outputs, y_test_gpu
+                )
+                test_preds_unscaled_list.append(pred_unscaled_t.detach().cpu())
+                test_targets_unscaled_list.append(y_unscaled_t.detach().cpu())
+
+        test_loss = tot_test_loss / len(test_dataset)
+        test_loss_unscaled = tot_test_loss_unscaled / len(test_dataset)
+        test_losses_ind = tot_ind_test_loss / len(test_dataset)
+        test_losses_unscaled_ind = tot_ind_test_loss_unscaled / len(test_dataset)
+
+        print(
+            f"Scaled test loss: {test_loss:.4f}, Unscaled test loss: {test_loss_unscaled:.4f}"
+        )  # , Individual scaled test losses: {test_losses_ind:.4f}, Individual unscaled test losses: {test_losses_unscaled_ind:.4f}")
+
+        # Core test metrics always get logged, even if the supplementary
+        # variance-ratio metrics below fail for some reason.
+        test_log = {
+            "Scaled test loss (MSE)": test_loss,
+            "Unscaled test loss (MSE)": test_loss_unscaled,
+            "6. Test loss d0 scaled": test_losses_ind[0],
+            "6. Test loss z0 scaled": test_losses_ind[1],
+            "6. Test loss phi scaled": test_losses_ind[2],
+            "6. Test loss theta scaled": test_losses_ind[3],
+            "6. Test loss q_over_p scaled": test_losses_ind[4],
+            "7. Test loss d0 unscaled": test_losses_unscaled_ind[0],
+            "7. Test loss z0 unscaled": test_losses_unscaled_ind[1],
+            "7. Test loss phi unscaled": test_losses_unscaled_ind[2],
+            "7. Test loss theta unscaled": test_losses_unscaled_ind[3],
+            "7. Test loss q_over_p unscaled": test_losses_unscaled_ind[4],
+        }
+
+        try:
+            test_stats = self._computeVarianceStats(
+                test_preds_unscaled_list, test_targets_unscaled_list
+            )
+            test_log.update(self._flattenVarianceStats("10", "Test", test_stats))
+        except Exception as exc:
+            # TODO: ACTS logging?
+            print(f"Test evaluation: skipping variance-ratio metrics ({exc!r})")
+
+        wandb.log(test_log)
