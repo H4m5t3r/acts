@@ -630,7 +630,14 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
         )
 
-        beamspots = createNewBeamspots(-29, 29, 40, 25)
+        lower = -29
+        upper = 29
+        n_points_in_xy = 40
+        distribution_radius = 25
+        beamspots = createNewBeamspots(
+            lower, upper, n_points_in_xy, distribution_radius
+        )
+        distance_between_beamspots = (upper - lower) / n_points_in_xy
 
         print("Starting training loop")
         for epoch in range(self.n_epochs):
@@ -646,7 +653,9 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             train_targets_unscaled_list = []
             for X_batch, params_train_batch in train_loader:
                 y_batch = createRandomBeamspotAndTrackParameters(
-                    beamspots, params_train_batch
+                    beamspots,
+                    params_train_batch,
+                    noise_scale=distance_between_beamspots / 2,
                 )
                 X_train_gpu = X_batch.to(self.device)
                 y_train_gpu = y_batch.to(self.device)

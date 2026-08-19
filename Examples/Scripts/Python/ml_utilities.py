@@ -18,7 +18,7 @@ from ml_data_augmentation import helix_poca
 
 
 def createNewBeamspots(lower, upper, points_in_xy, radius):
-    """Creates new beamspots distributed in a circular shape by first generating them
+    """Creates beamspots in the transverse plane distributed in a circular shape by first generating them
     uniformly inside a square and then filtering them to the ones that are within a given
     radius"""
     space = np.linspace(lower, upper, points_in_xy)
@@ -29,12 +29,14 @@ def createNewBeamspots(lower, upper, points_in_xy, radius):
     return circle_points
 
 
-def createRandomBeamspotAndTrackParameters(beamspots, truth_params):
-    # Assumed to be this, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+def createRandomBeamspotAndTrackParameters(beamspots, truth_params, noise_scale=0.0):
+    # Assumed to be 2.0, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
     Bz = 2.0
     n = len(truth_params)
-    # TODO: Add normal distribution noise to the beamspot to avoid discrete coordinates
     chosen_beamspots = beamspots[np.random.choice(len(beamspots), size=n)]
+    chosen_beamspots = chosen_beamspots + np.random.uniform(
+        low=-noise_scale, high=noise_scale, size=chosen_beamspots.shape
+    )
     beamspot_pocas = np.empty((n, 5))
     for i, truth_params_set in enumerate(truth_params):
         beamspot = chosen_beamspots[i]
