@@ -30,28 +30,26 @@ def createNewBeamspots(lower, upper, points_in_xy, radius):
 
 
 def createRandomBeamspotAndTrackParameters(beamspots, truth_params):
-    beamspot_pocas = []
-    for truth_params_set in truth_params:
-        beamspot = beamspots[np.random.choice(len(beamspots))]
-        # TODO: Add normal distribution noise to the beamspot to avoid discrete coordinates
+    # Assumed to be this, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+    Bz = 2.0
+    n = len(truth_params)
+    # TODO: Add normal distribution noise to the beamspot to avoid discrete coordinates
+    chosen_beamspots = beamspots[np.random.choice(len(beamspots), size=n)]
+    beamspot_pocas = np.empty((n, 5))
+    for i, truth_params_set in enumerate(truth_params):
+        beamspot = chosen_beamspots[i]
         vtx = truth_params_set[:3]
         mom = truth_params_set[3:6]
         q = truth_params_set[6]
-        # Assumed to be this, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
-        Bz = 2.0
         reference = np.array([beamspot[0], beamspot[1], 0.0])
         poca_output = helix_poca(vtx, mom, q, Bz, beamspot, reference)
-        beamspot_poca = np.array(
-            [
-                poca_output["d0"],
-                poca_output["z0"],
-                poca_output["phi"],
-                poca_output["theta"],
-                poca_output["qOverP"],
-            ]
+        beamspot_pocas[i] = (
+            poca_output["d0"],
+            poca_output["z0"],
+            poca_output["phi"],
+            poca_output["theta"],
+            poca_output["qOverP"],
         )
-        beamspot_pocas.append(beamspot_poca)
-    beamspot_pocas = np.array(beamspot_pocas)
     return beamspot_pocas
 
 
