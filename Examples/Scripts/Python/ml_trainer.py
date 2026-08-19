@@ -11,22 +11,44 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import wandb
-from ml_utilities import MlDataset, EarlyStopping
+from ml_utilities import (
+    MlDataset,
+    EarlyStopping,
+    createNewBeamspots,
+    createRandomBeamspotAndTrackParameters,
+)
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def getMlpOutputs(model, X_gpu, y_gpu, max_seq_len=None, device=None):
+def getMlpOutputs(model, X_gpu, max_seq_len=None, device=None):
     return model(X_gpu)  # .squeeze()
 
 
-def getTransformerOutputs(model, X_gpu, y_gpu, max_seq_len, device):
+def getTransformerOutputs(model, X_gpu, max_seq_len, device):
     batch_size = X_gpu.shape[0]
     X_gpu = X_gpu.reshape(batch_size, max_seq_len, 3)
     mask = (X_gpu == 0).all(dim=2)
     train_mask_gpu = mask.to(device)
     outputs = model(X_gpu, mask=train_mask_gpu)
     return outputs
+
+
+def createCosineTailSchedulerWithWarmup(self, optimizer, total_steps, warmup_steps):
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[
+            LinearLR(
+                optimizer,
+                start_factor=1e-4,
+                end_factor=1.0,
+                total_iters=warmup_steps,
+            ),
+            CosineAnnealingLR(optimizer, T_max=total_steps - warmup_steps),
+        ],
+        milestones=[warmup_steps],
+    )
+    return scheduler
 
 
 class MlTrainer:
@@ -63,252 +85,6 @@ class MlTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.criterion = loss_function
         self.target_names = ["d0", "z0", "phi", "theta", "q_over_p"]
-
-    def train(self, model, X_train, y_train, X_val, y_val):
-        train_dataset = MlDataset(X_train, y_train)
-        train_loader = DataLoader(
-            train_dataset, batch_size=self.batch_size, shuffle=True
-        )
-
-        val_dataset = MlDataset(X_val, y_val)
-        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
-
-        early_stopper = EarlyStopping(self.model_save_path, patience=3000, verbose=True)
-
-        model.to(self.device)
-        optimizer = optim.AdamW(model.parameters(), lr=self.learning_rate)
-
-        tot_steps = self.n_epochs * len(train_loader)
-        scheduler = self.createCosineTailSchedulerWithWarmup(
-            optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
-        )
-
-        print("Starting training loop")
-        for epoch in range(self.n_epochs):
-            model.train()
-            tot_train_loss = 0.0
-            tot_train_loss_unscaled = 0.0
-            tot_ind_train_loss = np.full(5, 0.0, dtype=np.float32)
-            tot_ind_train_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
-            tot_ind_val_loss = np.full(5, 0.0, dtype=np.float32)
-            tot_ind_val_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
-            # collectors for variance ratio computation (unscaled)
-            train_preds_unscaled_list = []
-            train_targets_unscaled_list = []
-            for X_batch, y_batch in train_loader:
-                X_train_gpu = X_batch.to(self.device)
-                y_train_gpu = y_batch.to(self.device)
-                optimizer.zero_grad()
-                outputs = self.getModelOutputs(
-                    model, X_train_gpu, y_train_gpu, self.max_seq_len, self.device
-                )
-                loss = self.criterion(outputs, y_train_gpu)
-                # collect unscaled predictions and targets for variance ratio
-                pred_unscaled_batch, y_unscaled_batch = self._unscale_tensors(
-                    outputs, y_train_gpu
-                )
-                train_preds_unscaled_list.append(pred_unscaled_batch.detach().cpu())
-                train_targets_unscaled_list.append(y_unscaled_batch.detach().cpu())
-                # Individual losses
-                aver_ind_output_losses = self.getIndividualScaledLosses(
-                    outputs, y_train_gpu
-                )
-                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
-                    outputs, y_train_gpu
-                )
-                tot_ind_train_loss += aver_ind_output_losses * X_batch.shape[0]
-                tot_ind_train_loss_unscaled += (
-                    aver_ind_unscaled_output_losses * X_batch.shape[0]
-                )
-                loss.backward()
-                optimizer.step()
-                # Loss multiplied with the batch size in case the sizes of the batches are not the same
-                # so it can be divided by the length of the dataset (n samples) later
-                tot_train_loss += loss.item() * X_batch.shape[0]
-                aver_unscaled_loss = self.getUnscaledLoss(
-                    self.criterion, outputs, y_batch
-                )
-                tot_train_loss_unscaled += aver_unscaled_loss * X_batch.shape[0]
-
-                # capture the LR actually used for this batch before the scheduler
-                # advances it, so the epoch's logged LR isn't off by one step
-                self.last_lr = optimizer.param_groups[0]["lr"]
-                scheduler.step()
-
-            # NOTE: divided by the length of the dataset in case the batch lengths are not the same
-            self.train_losses[epoch] = tot_train_loss / len(train_dataset)
-            self.train_losses_unscaled[epoch] = tot_train_loss_unscaled / len(
-                train_dataset
-            )
-            self.train_losses_ind[epoch] = tot_ind_train_loss / len(train_dataset)
-            self.train_losses_unscaled_ind[epoch] = tot_ind_train_loss_unscaled / len(
-                train_dataset
-            )
-
-            model.eval()
-            tot_val_loss = 0.0
-            tot_val_loss_unscaled = 0.0
-            with torch.no_grad():
-                val_preds_unscaled_list = []
-                val_targets_unscaled_list = []
-                for val_X, val_y in val_loader:
-                    X_val_gpu = val_X.to(self.device)
-                    y_val_gpu = val_y.to(self.device)
-                    val_outputs = self.getModelOutputs(
-                        model, X_val_gpu, y_val_gpu, self.max_seq_len, self.device
-                    )
-                    val_loss = self.criterion(val_outputs, y_val_gpu).item()
-                    tot_val_loss += val_loss * val_X.shape[0]
-
-                    aver_unscaled_val_loss = self.getUnscaledLoss(
-                        self.criterion, val_outputs, val_y
-                    )
-                    tot_val_loss_unscaled += aver_unscaled_val_loss * val_X.shape[0]
-
-                    aver_ind_val_losses = self.getIndividualScaledLosses(
-                        val_outputs, y_val_gpu
-                    )
-                    aver_ind_unscaled_val_losses = self.getIndividualUnscaledLosses(
-                        val_outputs, y_val_gpu
-                    )
-                    tot_ind_val_loss += aver_ind_val_losses * val_X.shape[0]
-                    tot_ind_val_loss_unscaled += (
-                        aver_ind_unscaled_val_losses * val_X.shape[0]
-                    )
-
-                    # collect unscaled predictions and targets for variance ratio
-                    pred_unscaled_val, y_unscaled_val = self._unscale_tensors(
-                        val_outputs, y_val_gpu
-                    )
-                    val_preds_unscaled_list.append(pred_unscaled_val.detach().cpu())
-                    val_targets_unscaled_list.append(y_unscaled_val.detach().cpu())
-
-            self.val_losses[epoch] = tot_val_loss / len(val_dataset)
-            self.val_losses_unscaled[epoch] = tot_val_loss_unscaled / len(val_dataset)
-            self.val_losses_ind[epoch] = tot_ind_val_loss / len(val_dataset)
-            self.val_losses_unscaled_ind[epoch] = tot_ind_val_loss_unscaled / len(
-                val_dataset
-            )
-
-            print(
-                f"Epoch {epoch+1}, Scaled training loss: {self.train_losses[epoch]:.4f}, Unscaled training loss: {self.train_losses_unscaled[epoch]:.4f}, Scaled validation loss: {self.val_losses[epoch]:.4f}, Unscaled validation loss {self.val_losses_unscaled[epoch]:.4f}"
-            )
-            # Core epoch metrics always get logged, even if the supplementary
-            # variance-ratio metrics below fail for some reason.
-            epoch_log = self.wandbLogging(epoch)
-
-            variance_log = {}
-            try:
-                train_stats = self._computeVarianceStats(
-                    train_preds_unscaled_list, train_targets_unscaled_list
-                )
-                val_stats = self._computeVarianceStats(
-                    val_preds_unscaled_list, val_targets_unscaled_list
-                )
-                variance_log.update(
-                    self._flattenVarianceStats("8", "Train", train_stats)
-                )
-                variance_log.update(self._flattenVarianceStats("9", "Val", val_stats))
-            except Exception as exc:
-                # Supplementary metrics only - never let a failure here drop
-                # the core loss curves from this epoch's log.
-                print(f"Epoch {epoch+1}: skipping variance-ratio metrics ({exc!r})")
-
-            # single wandb.log() call per epoch, so the step axis stays aligned
-            wandb.log({**epoch_log, **variance_log})
-
-            early_stopper(self.val_losses[epoch], model)
-            if early_stopper.early_stop:
-                print("Early stopping triggered.")
-                break
-
-        early_stopper.load_best_model(model)
-        return model
-
-    def test(self, model, X_test, y_test):
-        model.eval()
-        test_dataset = MlDataset(X_test, y_test)
-        test_loader = DataLoader(
-            test_dataset, batch_size=self.batch_size, shuffle=False
-        )
-
-        tot_test_loss = 0.0
-        tot_test_loss_unscaled = 0.0
-        tot_ind_test_loss = np.full(5, 0.0, dtype=np.float32)
-        tot_ind_test_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
-
-        test_preds_unscaled_list = []
-        test_targets_unscaled_list = []
-
-        with torch.no_grad():
-            for X_test, y_test in test_loader:
-                X_test_gpu = X_test.to(self.device)
-                y_test_gpu = y_test.to(self.device)
-                test_outputs = self.getModelOutputs(
-                    model, X_test_gpu, y_test_gpu, self.max_seq_len, self.device
-                )
-                tot_test_loss += (
-                    self.criterion(test_outputs, y_test_gpu).item() * X_test.shape[0]
-                )
-                aver_unscaled_test_loss = self.getUnscaledLoss(
-                    self.criterion, test_outputs, y_test_gpu
-                )
-                tot_test_loss_unscaled += aver_unscaled_test_loss * X_test.shape[0]
-
-                aver_ind_output_losses = self.getIndividualScaledLosses(
-                    test_outputs, y_test_gpu
-                )
-                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
-                    test_outputs, y_test_gpu
-                )
-                tot_ind_test_loss += aver_ind_output_losses * X_test.shape[0]
-                tot_ind_test_loss_unscaled += (
-                    aver_ind_unscaled_output_losses * X_test.shape[0]
-                )
-
-                # collect unscaled preds/targets for variance ratios
-                pred_unscaled_t, y_unscaled_t = self._unscale_tensors(
-                    test_outputs, y_test_gpu
-                )
-                test_preds_unscaled_list.append(pred_unscaled_t.detach().cpu())
-                test_targets_unscaled_list.append(y_unscaled_t.detach().cpu())
-
-        test_loss = tot_test_loss / len(test_dataset)
-        test_loss_unscaled = tot_test_loss_unscaled / len(test_dataset)
-        test_losses_ind = tot_ind_test_loss / len(test_dataset)
-        test_losses_unscaled_ind = tot_ind_test_loss_unscaled / len(test_dataset)
-
-        print(
-            f"Scaled test loss: {test_loss:.4f}, Unscaled test loss: {test_loss_unscaled:.4f}"
-        )  # , Individual scaled test losses: {test_losses_ind:.4f}, Individual unscaled test losses: {test_losses_unscaled_ind:.4f}")
-
-        # Core test metrics always get logged, even if the supplementary
-        # variance-ratio metrics below fail for some reason.
-        test_log = {
-            "Scaled test loss (MSE)": test_loss,
-            "Unscaled test loss (MSE)": test_loss_unscaled,
-            "6. Test loss d0 scaled": test_losses_ind[0],
-            "6. Test loss z0 scaled": test_losses_ind[1],
-            "6. Test loss phi scaled": test_losses_ind[2],
-            "6. Test loss theta scaled": test_losses_ind[3],
-            "6. Test loss q_over_p scaled": test_losses_ind[4],
-            "7. Test loss d0 unscaled": test_losses_unscaled_ind[0],
-            "7. Test loss z0 unscaled": test_losses_unscaled_ind[1],
-            "7. Test loss phi unscaled": test_losses_unscaled_ind[2],
-            "7. Test loss theta unscaled": test_losses_unscaled_ind[3],
-            "7. Test loss q_over_p unscaled": test_losses_unscaled_ind[4],
-        }
-
-        try:
-            test_stats = self._computeVarianceStats(
-                test_preds_unscaled_list, test_targets_unscaled_list
-            )
-            test_log.update(self._flattenVarianceStats("10", "Test", test_stats))
-        except Exception as exc:
-            # TODO: ACTS logging?
-            print(f"Test evaluation: skipping variance-ratio metrics ({exc!r})")
-
-        wandb.log(test_log)
 
     def save_model(self, model):
         torch.save(model.state_dict(), self.model_save_path)
@@ -552,22 +328,6 @@ class MlTrainer:
             )
         return log_dict
 
-    def createCosineTailSchedulerWithWarmup(self, optimizer, total_steps, warmup_steps):
-        scheduler = SequentialLR(
-            optimizer,
-            schedulers=[
-                LinearLR(
-                    optimizer,
-                    start_factor=1e-4,
-                    end_factor=1.0,
-                    total_iters=warmup_steps,
-                ),
-                CosineAnnealingLR(optimizer, T_max=total_steps - warmup_steps),
-            ],
-            milestones=[warmup_steps],
-        )
-        return scheduler
-
     def wandbLogging(self, epoch):
         # Return a dict of epoch-level metrics so they can be merged and logged
         # together with other metrics in the training loop (avoids double
@@ -600,3 +360,422 @@ class MlTrainer:
             "5. theta_val loss scaled": self.val_losses_ind[epoch][3],
             "5. q_over_p_val loss scaled": self.val_losses_ind[epoch][4],
         }
+
+
+class OrigoBeamspotTrainer(MlTrainer):
+    def train(self, model, X_train, y_train, X_val, y_val):
+        train_dataset = MlDataset(X_train, y_train)
+        train_loader = DataLoader(
+            train_dataset, batch_size=self.batch_size, shuffle=True
+        )
+
+        val_dataset = MlDataset(X_val, y_val)
+        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
+
+        early_stopper = EarlyStopping(self.model_save_path, patience=3000, verbose=True)
+
+        model.to(self.device)
+        optimizer = optim.AdamW(model.parameters(), lr=self.learning_rate)
+
+        tot_steps = self.n_epochs * len(train_loader)
+        scheduler = createCosineTailSchedulerWithWarmup(
+            optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
+        )
+
+        print("Starting training loop")
+        for epoch in range(self.n_epochs):
+            model.train()
+            tot_train_loss = 0.0
+            tot_train_loss_unscaled = 0.0
+            tot_ind_train_loss = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_train_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_val_loss = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_val_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+            # collectors for variance ratio computation (unscaled)
+            train_preds_unscaled_list = []
+            train_targets_unscaled_list = []
+            for X_batch, y_batch in train_loader:
+                X_train_gpu = X_batch.to(self.device)
+                y_train_gpu = y_batch.to(self.device)
+                optimizer.zero_grad()
+                outputs = self.getModelOutputs(
+                    model, X_train_gpu, self.max_seq_len, self.device
+                )
+                loss = self.criterion(outputs, y_train_gpu)
+                # collect unscaled predictions and targets for variance ratio
+                pred_unscaled_batch, y_unscaled_batch = self._unscale_tensors(
+                    outputs, y_train_gpu
+                )
+                train_preds_unscaled_list.append(pred_unscaled_batch.detach().cpu())
+                train_targets_unscaled_list.append(y_unscaled_batch.detach().cpu())
+                # Individual losses
+                aver_ind_output_losses = self.getIndividualScaledLosses(
+                    outputs, y_train_gpu
+                )
+                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
+                    outputs, y_train_gpu
+                )
+                tot_ind_train_loss += aver_ind_output_losses * X_batch.shape[0]
+                tot_ind_train_loss_unscaled += (
+                    aver_ind_unscaled_output_losses * X_batch.shape[0]
+                )
+                loss.backward()
+                optimizer.step()
+                # Loss multiplied with the batch size in case the sizes of the batches are not the same
+                # so it can be divided by the length of the dataset (n samples) later
+                tot_train_loss += loss.item() * X_batch.shape[0]
+                aver_unscaled_loss = self.getUnscaledLoss(
+                    self.criterion, outputs, y_batch
+                )
+                tot_train_loss_unscaled += aver_unscaled_loss * X_batch.shape[0]
+
+                # capture the LR actually used for this batch before the scheduler
+                # advances it, so the epoch's logged LR isn't off by one step
+                self.last_lr = optimizer.param_groups[0]["lr"]
+                scheduler.step()
+
+            # NOTE: divided by the length of the dataset in case the batch lengths are not the same
+            self.train_losses[epoch] = tot_train_loss / len(train_dataset)
+            self.train_losses_unscaled[epoch] = tot_train_loss_unscaled / len(
+                train_dataset
+            )
+            self.train_losses_ind[epoch] = tot_ind_train_loss / len(train_dataset)
+            self.train_losses_unscaled_ind[epoch] = tot_ind_train_loss_unscaled / len(
+                train_dataset
+            )
+
+            model.eval()
+            tot_val_loss = 0.0
+            tot_val_loss_unscaled = 0.0
+            with torch.no_grad():
+                val_preds_unscaled_list = []
+                val_targets_unscaled_list = []
+                for val_X, val_y in val_loader:
+                    X_val_gpu = val_X.to(self.device)
+                    y_val_gpu = val_y.to(self.device)
+                    val_outputs = self.getModelOutputs(
+                        model, X_val_gpu, self.max_seq_len, self.device
+                    )
+                    val_loss = self.criterion(val_outputs, y_val_gpu).item()
+                    tot_val_loss += val_loss * val_X.shape[0]
+
+                    aver_unscaled_val_loss = self.getUnscaledLoss(
+                        self.criterion, val_outputs, val_y
+                    )
+                    tot_val_loss_unscaled += aver_unscaled_val_loss * val_X.shape[0]
+
+                    aver_ind_val_losses = self.getIndividualScaledLosses(
+                        val_outputs, y_val_gpu
+                    )
+                    aver_ind_unscaled_val_losses = self.getIndividualUnscaledLosses(
+                        val_outputs, y_val_gpu
+                    )
+                    tot_ind_val_loss += aver_ind_val_losses * val_X.shape[0]
+                    tot_ind_val_loss_unscaled += (
+                        aver_ind_unscaled_val_losses * val_X.shape[0]
+                    )
+
+                    # collect unscaled predictions and targets for variance ratio
+                    pred_unscaled_val, y_unscaled_val = self._unscale_tensors(
+                        val_outputs, y_val_gpu
+                    )
+                    val_preds_unscaled_list.append(pred_unscaled_val.detach().cpu())
+                    val_targets_unscaled_list.append(y_unscaled_val.detach().cpu())
+
+            self.val_losses[epoch] = tot_val_loss / len(val_dataset)
+            self.val_losses_unscaled[epoch] = tot_val_loss_unscaled / len(val_dataset)
+            self.val_losses_ind[epoch] = tot_ind_val_loss / len(val_dataset)
+            self.val_losses_unscaled_ind[epoch] = tot_ind_val_loss_unscaled / len(
+                val_dataset
+            )
+
+            print(
+                f"Epoch {epoch+1}, Scaled training loss: {self.train_losses[epoch]:.4f}, Unscaled training loss: {self.train_losses_unscaled[epoch]:.4f}, Scaled validation loss: {self.val_losses[epoch]:.4f}, Unscaled validation loss {self.val_losses_unscaled[epoch]:.4f}"
+            )
+            # Core epoch metrics always get logged, even if the supplementary
+            # variance-ratio metrics below fail for some reason.
+            epoch_log = self.wandbLogging(epoch)
+
+            variance_log = {}
+            try:
+                train_stats = self._computeVarianceStats(
+                    train_preds_unscaled_list, train_targets_unscaled_list
+                )
+                val_stats = self._computeVarianceStats(
+                    val_preds_unscaled_list, val_targets_unscaled_list
+                )
+                variance_log.update(
+                    self._flattenVarianceStats("8", "Train", train_stats)
+                )
+                variance_log.update(self._flattenVarianceStats("9", "Val", val_stats))
+            except Exception as exc:
+                # Supplementary metrics only - never let a failure here drop
+                # the core loss curves from this epoch's log.
+                print(f"Epoch {epoch+1}: skipping variance-ratio metrics ({exc!r})")
+
+            # single wandb.log() call per epoch, so the step axis stays aligned
+            wandb.log({**epoch_log, **variance_log})
+
+            early_stopper(self.val_losses[epoch], model)
+            if early_stopper.early_stop:
+                print("Early stopping triggered.")
+                break
+
+        early_stopper.load_best_model(model)
+        return model
+
+    def test(self, model, X_test, y_test):
+        model.eval()
+        test_dataset = MlDataset(X_test, y_test)
+        test_loader = DataLoader(
+            test_dataset, batch_size=self.batch_size, shuffle=False
+        )
+
+        tot_test_loss = 0.0
+        tot_test_loss_unscaled = 0.0
+        tot_ind_test_loss = np.full(5, 0.0, dtype=np.float32)
+        tot_ind_test_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+
+        test_preds_unscaled_list = []
+        test_targets_unscaled_list = []
+
+        with torch.no_grad():
+            for X_test, y_test in test_loader:
+                X_test_gpu = X_test.to(self.device)
+                y_test_gpu = y_test.to(self.device)
+                test_outputs = self.getModelOutputs(
+                    model, X_test_gpu, self.max_seq_len, self.device
+                )
+                tot_test_loss += (
+                    self.criterion(test_outputs, y_test_gpu).item() * X_test.shape[0]
+                )
+                aver_unscaled_test_loss = self.getUnscaledLoss(
+                    self.criterion, test_outputs, y_test_gpu
+                )
+                tot_test_loss_unscaled += aver_unscaled_test_loss * X_test.shape[0]
+
+                aver_ind_output_losses = self.getIndividualScaledLosses(
+                    test_outputs, y_test_gpu
+                )
+                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
+                    test_outputs, y_test_gpu
+                )
+                tot_ind_test_loss += aver_ind_output_losses * X_test.shape[0]
+                tot_ind_test_loss_unscaled += (
+                    aver_ind_unscaled_output_losses * X_test.shape[0]
+                )
+
+                # collect unscaled preds/targets for variance ratios
+                pred_unscaled_t, y_unscaled_t = self._unscale_tensors(
+                    test_outputs, y_test_gpu
+                )
+                test_preds_unscaled_list.append(pred_unscaled_t.detach().cpu())
+                test_targets_unscaled_list.append(y_unscaled_t.detach().cpu())
+
+        test_loss = tot_test_loss / len(test_dataset)
+        test_loss_unscaled = tot_test_loss_unscaled / len(test_dataset)
+        test_losses_ind = tot_ind_test_loss / len(test_dataset)
+        test_losses_unscaled_ind = tot_ind_test_loss_unscaled / len(test_dataset)
+
+        print(
+            f"Scaled test loss: {test_loss:.4f}, Unscaled test loss: {test_loss_unscaled:.4f}"
+        )  # , Individual scaled test losses: {test_losses_ind:.4f}, Individual unscaled test losses: {test_losses_unscaled_ind:.4f}")
+
+        # Core test metrics always get logged, even if the supplementary
+        # variance-ratio metrics below fail for some reason.
+        test_log = {
+            "Scaled test loss (MSE)": test_loss,
+            "Unscaled test loss (MSE)": test_loss_unscaled,
+            "6. Test loss d0 scaled": test_losses_ind[0],
+            "6. Test loss z0 scaled": test_losses_ind[1],
+            "6. Test loss phi scaled": test_losses_ind[2],
+            "6. Test loss theta scaled": test_losses_ind[3],
+            "6. Test loss q_over_p scaled": test_losses_ind[4],
+            "7. Test loss d0 unscaled": test_losses_unscaled_ind[0],
+            "7. Test loss z0 unscaled": test_losses_unscaled_ind[1],
+            "7. Test loss phi unscaled": test_losses_unscaled_ind[2],
+            "7. Test loss theta unscaled": test_losses_unscaled_ind[3],
+            "7. Test loss q_over_p unscaled": test_losses_unscaled_ind[4],
+        }
+
+        try:
+            test_stats = self._computeVarianceStats(
+                test_preds_unscaled_list, test_targets_unscaled_list
+            )
+            test_log.update(self._flattenVarianceStats("10", "Test", test_stats))
+        except Exception as exc:
+            # TODO: ACTS logging?
+            print(f"Test evaluation: skipping variance-ratio metrics ({exc!r})")
+
+        wandb.log(test_log)
+
+
+class ArbitraryBeamspotTrainer(MlTrainer):
+    def train(self, model, X_train, train_params, X_val, val_params):
+        train_dataset = MlDataset(X_train, train_params)
+        train_loader = DataLoader(
+            train_dataset, batch_size=self.batch_size, shuffle=True
+        )
+
+        val_dataset = MlDataset(X_val, val_params)
+        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
+
+        early_stopper = EarlyStopping(self.model_save_path, patience=3000, verbose=True)
+
+        model.to(self.device)
+        optimizer = optim.AdamW(model.parameters(), lr=self.learning_rate)
+
+        tot_steps = self.n_epochs * len(train_loader)
+        scheduler = createCosineTailSchedulerWithWarmup(
+            optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
+        )
+
+        beamspots = createNewBeamspots(-29, 29, 40, 25)
+
+        print("Starting training loop")
+        for epoch in range(self.n_epochs):
+            model.train()
+            tot_train_loss = 0.0
+            tot_train_loss_unscaled = 0.0
+            tot_ind_train_loss = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_train_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_val_loss = np.full(5, 0.0, dtype=np.float32)
+            tot_ind_val_loss_unscaled = np.full(5, 0.0, dtype=np.float32)
+            # collectors for variance ratio computation (unscaled)
+            train_preds_unscaled_list = []
+            train_targets_unscaled_list = []
+            for X_batch, params_train_batch in train_loader:
+                y_batch = createRandomBeamspotAndTrackParameters(
+                    beamspots, params_train_batch
+                )
+                X_train_gpu = X_batch.to(self.device)
+                y_train_gpu = y_batch.to(self.device)
+                optimizer.zero_grad()
+                outputs = self.getModelOutputs(
+                    model, X_train_gpu, self.max_seq_len, self.device
+                )
+                loss = self.criterion(outputs, y_train_gpu)
+                # collect unscaled predictions and targets for variance ratio
+                pred_unscaled_batch, y_unscaled_batch = self._unscale_tensors(
+                    outputs, y_train_gpu
+                )
+                train_preds_unscaled_list.append(pred_unscaled_batch.detach().cpu())
+                train_targets_unscaled_list.append(y_unscaled_batch.detach().cpu())
+                # Individual losses
+                aver_ind_output_losses = self.getIndividualScaledLosses(
+                    outputs, y_train_gpu
+                )
+                aver_ind_unscaled_output_losses = self.getIndividualUnscaledLosses(
+                    outputs, y_train_gpu
+                )
+                tot_ind_train_loss += aver_ind_output_losses * X_batch.shape[0]
+                tot_ind_train_loss_unscaled += (
+                    aver_ind_unscaled_output_losses * X_batch.shape[0]
+                )
+                loss.backward()
+                optimizer.step()
+                # Loss multiplied with the batch size in case the sizes of the batches are not the same
+                # so it can be divided by the length of the dataset (n samples) later
+                tot_train_loss += loss.item() * X_batch.shape[0]
+                aver_unscaled_loss = self.getUnscaledLoss(
+                    self.criterion, outputs, y_batch
+                )
+                tot_train_loss_unscaled += aver_unscaled_loss * X_batch.shape[0]
+
+                # capture the LR actually used for this batch before the scheduler
+                # advances it, so the epoch's logged LR isn't off by one step
+                self.last_lr = optimizer.param_groups[0]["lr"]
+                scheduler.step()
+
+            # NOTE: divided by the length of the dataset in case the batch lengths are not the same
+            self.train_losses[epoch] = tot_train_loss / len(train_dataset)
+            self.train_losses_unscaled[epoch] = tot_train_loss_unscaled / len(
+                train_dataset
+            )
+            self.train_losses_ind[epoch] = tot_ind_train_loss / len(train_dataset)
+            self.train_losses_unscaled_ind[epoch] = tot_ind_train_loss_unscaled / len(
+                train_dataset
+            )
+
+            model.eval()
+            tot_val_loss = 0.0
+            tot_val_loss_unscaled = 0.0
+            with torch.no_grad():
+                val_preds_unscaled_list = []
+                val_targets_unscaled_list = []
+                for val_X, params_val_batch in val_loader:
+                    val_y = createRandomBeamspotAndTrackParameters(
+                        beamspots, params_val_batch
+                    )
+                    X_val_gpu = val_X.to(self.device)
+                    y_val_gpu = val_y.to(self.device)
+                    val_outputs = self.getModelOutputs(
+                        model, X_val_gpu, self.max_seq_len, self.device
+                    )
+                    val_loss = self.criterion(val_outputs, y_val_gpu).item()
+                    tot_val_loss += val_loss * val_X.shape[0]
+
+                    aver_unscaled_val_loss = self.getUnscaledLoss(
+                        self.criterion, val_outputs, val_y
+                    )
+                    tot_val_loss_unscaled += aver_unscaled_val_loss * val_X.shape[0]
+
+                    aver_ind_val_losses = self.getIndividualScaledLosses(
+                        val_outputs, y_val_gpu
+                    )
+                    aver_ind_unscaled_val_losses = self.getIndividualUnscaledLosses(
+                        val_outputs, y_val_gpu
+                    )
+                    tot_ind_val_loss += aver_ind_val_losses * val_X.shape[0]
+                    tot_ind_val_loss_unscaled += (
+                        aver_ind_unscaled_val_losses * val_X.shape[0]
+                    )
+
+                    # collect unscaled predictions and targets for variance ratio
+                    pred_unscaled_val, y_unscaled_val = self._unscale_tensors(
+                        val_outputs, y_val_gpu
+                    )
+                    val_preds_unscaled_list.append(pred_unscaled_val.detach().cpu())
+                    val_targets_unscaled_list.append(y_unscaled_val.detach().cpu())
+
+            self.val_losses[epoch] = tot_val_loss / len(val_dataset)
+            self.val_losses_unscaled[epoch] = tot_val_loss_unscaled / len(val_dataset)
+            self.val_losses_ind[epoch] = tot_ind_val_loss / len(val_dataset)
+            self.val_losses_unscaled_ind[epoch] = tot_ind_val_loss_unscaled / len(
+                val_dataset
+            )
+
+            print(
+                f"Epoch {epoch+1}, Scaled training loss: {self.train_losses[epoch]:.4f}, Unscaled training loss: {self.train_losses_unscaled[epoch]:.4f}, Scaled validation loss: {self.val_losses[epoch]:.4f}, Unscaled validation loss {self.val_losses_unscaled[epoch]:.4f}"
+            )
+            # Core epoch metrics always get logged, even if the supplementary
+            # variance-ratio metrics below fail for some reason.
+            epoch_log = self.wandbLogging(epoch)
+
+            variance_log = {}
+            try:
+                train_stats = self._computeVarianceStats(
+                    train_preds_unscaled_list, train_targets_unscaled_list
+                )
+                val_stats = self._computeVarianceStats(
+                    val_preds_unscaled_list, val_targets_unscaled_list
+                )
+                variance_log.update(
+                    self._flattenVarianceStats("8", "Train", train_stats)
+                )
+                variance_log.update(self._flattenVarianceStats("9", "Val", val_stats))
+            except Exception as exc:
+                # Supplementary metrics only - never let a failure here drop
+                # the core loss curves from this epoch's log.
+                print(f"Epoch {epoch+1}: skipping variance-ratio metrics ({exc!r})")
+
+            # single wandb.log() call per epoch, so the step axis stays aligned
+            wandb.log({**epoch_log, **variance_log})
+
+            early_stopper(self.val_losses[epoch], model)
+            if early_stopper.early_stop:
+                print("Early stopping triggered.")
+                break
+
+        early_stopper.load_best_model(model)
+        return model

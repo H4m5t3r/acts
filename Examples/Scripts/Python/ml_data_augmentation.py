@@ -19,7 +19,7 @@ Conventions
   the true 3D distance (no closed form exists in that case).
 """
 
-import numpy.typing as npt
+from numpy.typing import ArrayLike
 import numpy as np
 
 import uproot as ur
@@ -31,11 +31,11 @@ KAPPA = 0.299792458
 
 
 def helix_poca(
-    vertex: npt.ArrayLike,
-    momentum: npt.ArrayLike,
+    vertex: ArrayLike,
+    momentum: ArrayLike,
     q: float,
     Bz: float,
-    reference: npt.ArrayLike = (0.0, 0.0, 0.0),
+    reference: ArrayLike = (0.0, 0.0, 0.0),
     units_per_metre: float = 1000.0,
     refine_3d: bool = False,
 ):
@@ -261,8 +261,8 @@ if __name__ == "__main__":
     vtx = np.array([v["vx"][0], v["vy"][0], v["vz"][0]])
     pT_ = v["pT"][0]
     mom = np.array([v["px"][0], v["py"][0], v["pz"][0]])
-    q = -1.0
-    Bz = -2.0
+    q = v["q"]
+    Bz = 2.0
     ref = np.array([0, 0, 0])
 
     out = helix_poca(vtx, mom, q, Bz, ref, refine_3d=False)

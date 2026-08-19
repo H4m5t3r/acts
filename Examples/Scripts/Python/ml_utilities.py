@@ -12,17 +12,47 @@ import uproot as ur
 import awkward as ak
 import pandas as pd
 from pathlib import Path
+from ml_data_augmentation import helix_poca
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def newBeamspots(lower, upper, points_in_xy, radius):
+def createNewBeamspots(lower, upper, points_in_xy, radius):
+    """Creates new beamspots distributed in a circular shape by first generating them
+    uniformly inside a square and then filtering them to the ones that are within a given
+    radius"""
     space = np.linspace(lower, upper, points_in_xy)
     x, y = np.meshgrid(space, space, indexing="ij")
     square_points = np.stack([x, y], axis=-1)
     mask = np.linalg.norm(square_points, axis=-1) <= radius
     circle_points = square_points[mask]
     return circle_points
+
+
+def createRandomBeamspotAndTrackParameters(beamspots, truth_params):
+    beamspot_pocas = []
+    for truth_params_set in truth_params:
+        beamspot = beamspots[np.random.choice(len(beamspots))]
+        # TODO: Add normal distribution noise to the beamspot to avoid discrete coordinates
+        vtx = truth_params_set[:3]
+        mom = truth_params_set[3:6]
+        q = truth_params_set[6]
+        # Assumed to be this, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+        Bz = 2.0
+        reference = np.array([beamspot[0], beamspot[1], 0.0])
+        poca_output = helix_poca(vtx, mom, q, Bz, beamspot, reference)
+        beamspot_poca = np.array(
+            [
+                poca_output["d0"],
+                poca_output["z0"],
+                poca_output["phi"],
+                poca_output["theta"],
+                poca_output["qOverP"],
+            ]
+        )
+        beamspot_pocas.append(beamspot_poca)
+    beamspot_pocas = np.array(beamspot_pocas)
+    return beamspot_pocas
 
 
 class MlDataset(Dataset):
@@ -324,7 +354,6 @@ class DataHandler:
                 "event_id": ak.to_numpy(
                     tracksummary_tree["event_nr"].array()[combined_filter]
                 ).squeeze(),
-                # TODO: These are not the vertex coordinates, right?
                 "d0": ak.to_numpy(
                     tracksummary_tree["t_d0"].array()[combined_filter]
                 ).squeeze(),
