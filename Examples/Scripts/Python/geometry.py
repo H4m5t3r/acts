@@ -6,7 +6,7 @@ from pathlib import Path
 
 import acts
 import acts.examples
-from acts.json import MaterialMapJsonConverter
+from acts.json import MaterialMapJsonConverter, TrackingGeometryJsonConverter
 from acts.examples.odd import getOpenDataDetector
 from acts.examples import (
     WhiteBoard,
@@ -30,7 +30,9 @@ def runGeometry(
     events=1,
     outputObj=True,
     outputCsv=True,
-    outputJson=True,
+    outputSurfacesJson=True,
+    outputMaterialMap=True,
+    serializeGeometryJson=False,
 ):
     for ievt in range(events):
         eventStore = WhiteBoard(name=f"EventStore#{ievt}", level=acts.logging.INFO)
@@ -55,18 +57,21 @@ def runGeometry(
             )
             writer.write(context)
 
-        if outputObj:
+        # The obj and material map outputs go to a single, event-independent
+        # file each, so writing them once (on the first event) is enough --
+        # every further event would only overwrite the same file.
+        if outputObj and ievt == 0:
             vis = acts.ObjVisualization3D()
             trackingGeometry.visualize(
                 vis,
-                context.geoContext,
+                context.recoGeoContext,
                 portalViewConfig=acts.ViewConfig(visible=False),
                 sensitiveViewConfig=acts.ViewConfig(visible=True),
                 viewConfig=acts.ViewConfig(visible=False),
             )
             vis.write(outputDir / "obj" / "geometry.obj")
 
-        if outputJson:
+        if outputSurfacesJson:
             # if not os.path.isdir(outputDir / "json"):
             #    os.makedirs(outputDir / "json")
             writer = JsonSurfacesWriter(
@@ -78,24 +83,31 @@ def runGeometry(
             )
             writer.write(context)
 
-            jmConverterCfg = MaterialMapJsonConverter.Config(
-                processSensitives=True,
-                processApproaches=True,
-                processRepresenting=True,
-                processBoundaries=True,
-                processVolumes=True,
-                processNonMaterial=True,
-                context=context.geoContext,
-            )
+            if outputMaterialMap and ievt == 0:
+                jmConverterCfg = MaterialMapJsonConverter.Config(
+                    processSensitives=True,
+                    processApproaches=True,
+                    processRepresenting=True,
+                    processBoundaries=True,
+                    processVolumes=True,
+                    processNonMaterial=True,
+                    context=context.recoGeoContext,
+                )
 
-            jmw = JsonMaterialWriter(
-                level=acts.logging.VERBOSE,
-                converterCfg=jmConverterCfg,
-                fileName=str(outputDir / "geometry-map"),
-                writeFormat=JsonFormat.Json,
-            )
+                jmw = JsonMaterialWriter(
+                    level=acts.logging.VERBOSE,
+                    converterCfg=jmConverterCfg,
+                    fileName=str(outputDir / "geometry-map"),
+                    writeFormat=JsonFormat.Json,
+                )
 
-            jmw.write(trackingGeometry)
+                jmw.write(trackingGeometry)
+
+        if serializeGeometryJson:
+            converter = TrackingGeometryJsonConverter(level=acts.logging.INFO)
+            jsonStr = converter.toJson(context.recoGeoContext, trackingGeometry)
+            outPath = outputDir / "json" / "tracking-geometry.json"
+            outPath.write_text(jsonStr)
 
 
 if "__main__" == __name__:

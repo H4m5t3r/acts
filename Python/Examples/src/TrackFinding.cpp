@@ -6,7 +6,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#include "Acts/Seeding2/GraphBasedTrackSeeder.hpp"
+#include "Acts/Seeding/GraphBasedTrackSeeder.hpp"
 #include "ActsExamples/TrackFinding/AdaptiveHoughTransformSeeder.hpp"
 #include "ActsExamples/TrackFinding/GraphBasedSeedingAlgorithm.hpp"
 #include "ActsExamples/TrackFinding/GridTripletSeedingAlgorithm.hpp"
@@ -43,7 +43,8 @@ void addTrackFinding(py::module& mex) {
   ACTS_PYTHON_DECLARE_ALGORITHM(SpacePointMaker, mex, "SpacePointMaker",
                                 inputMeasurements, outputSpacePoints,
                                 trackingGeometry, geometrySelection,
-                                stripGeometrySelection);
+                                stripGeometrySelection, stripVertex,
+                                stripLengthTolerance, stripLengthGapTolerance);
 
   ACTS_PYTHON_DECLARE_ALGORITHM(
       GridTripletSeedingAlgorithm, mex, "GridTripletSeedingAlgorithm",
@@ -60,7 +61,8 @@ void addTrackFinding(py::module& mex) {
       zOriginWeightFactor, maxSeedsPerSpM, compatSeedLimit, seedWeightIncrement,
       numSeedIncrement, seedConfirmation, centralSeedConfirmationRange,
       forwardSeedConfirmationRange, maxSeedsPerSpMConf,
-      maxQualitySeedsPerSpMConf, useDeltaRinsteadOfTopRadius, useExtraCuts);
+      maxQualitySeedsPerSpMConf, useDeltaRinsteadOfTopRadius, useExtraCuts,
+      inputVertices, vertexZNSigma, vertexZMargin);
 
   ACTS_PYTHON_DECLARE_ALGORITHM(
       OrthogonalTripletSeedingAlgorithm, mex,
@@ -114,9 +116,9 @@ void addTrackFinding(py::module& mex) {
       TrackParamsEstimationAlgorithm, mex, "TrackParamsEstimationAlgorithm",
       inputSeeds, inputProtoTracks, inputParticleHypotheses,
       outputTrackParameters, outputSeeds, outputProtoTracks, trackingGeometry,
-      magneticField, bFieldMin, initialSigmas, initialSigmaQoverPt,
-      initialSigmaPtRel, initialVarInflation, noTimeVarInflation,
-      particleHypothesis);
+      magneticField, bFieldMin, spacePointSelection, minTransverseDistance,
+      initialSigmas, initialSigmaQoverPt, initialSigmaPtRel,
+      initialVarInflation, noTimeVarInflation, particleHypothesis);
 
   ACTS_PYTHON_DECLARE_ALGORITHM(
       TrackParamsLookupEstimation, mex, "TrackParamsLookupEstimation",
@@ -138,6 +140,16 @@ void addTrackFinding(py::module& mex) {
               *Acts::getDefaultLogger("TrackFinding", level));
         });
 
+    alg.def_static(
+        "makeBremTrackFinderFunction",
+        [](std::shared_ptr<const Acts::TrackingGeometry> trackingGeometry,
+           std::shared_ptr<const Acts::MagneticFieldProvider> magneticField,
+           Acts::Logging::Level level) {
+          return Alg::makeBremTrackFinderFunction(
+              std::move(trackingGeometry), std::move(magneticField),
+              *Acts::getDefaultLogger("TrackFindingBrem", level));
+        });
+
     py::class_<Alg::TrackFinderFunction,
                std::shared_ptr<Alg::TrackFinderFunction>>(
         alg, "TrackFinderFunction");
@@ -145,10 +157,11 @@ void addTrackFinding(py::module& mex) {
     ACTS_PYTHON_STRUCT(
         c, inputMeasurements, inputInitialTrackParameters, inputSeeds,
         outputTracks, trackingGeometry, magneticField, findTracks,
-        measurementSelectorCfg, trackSelectorCfg, maxSteps, twoWay,
-        reverseSearch, seedDeduplication, stayOnSeed, pixelVolumeIds,
+        findTracksBrem, measurementSelectorCfg, trackSelectorCfg, maxSteps,
+        twoWay, reverseSearch, seedDeduplication, stayOnSeed, pixelVolumeIds,
         stripVolumeIds, maxPixelHoles, maxStripHoles, trimTracks,
-        useJosephFormulation, constrainToVolumeIds, endOfWorldVolumeIds);
+        recordMaterialStates, useJosephFormulation, constrainToVolumeIds,
+        endOfWorldVolumeIds);
   }
 }
 

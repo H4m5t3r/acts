@@ -31,12 +31,15 @@ x86_64-slc6-gcc49-opt
 #codegen related
 codegen/build/
 codegen/src/codegen.egg-info/
+# the codegen manifest is tracked, despite the blanket *.json rule above
+!codegen/manifest.json
+# generated code shipped in source archives, never committed
+/prebuilt-codegen/
 
 # dont ignore hidden configs
 !.clang-format
 !.github
 !.gitignore
-!.gitlab-ci.yml
 !.clang-tidy
 !.oclint
 !.devcontainer
@@ -49,3 +52,9 @@ codegen/src/codegen.egg-info/
 /ml_data
 /ml_output
 /output_track_finding_python_only
+# don't ignore CMake preset files
+!CMakePresets.json
+
+# physmon reference histograms are fetched by content hash, not committed.
+# See CI/physmon/reference.sha256 and CI/physmon/reference.py
+/CI/physmon/reference/

@@ -10,11 +10,11 @@
 
 #pragma once
 
-#include "Acts/EventData/SpacePointContainer2.hpp"
+#include "Acts/EventData/SpacePointContainer.hpp"
 #include "Acts/Geometry/TrackingGeometry.hpp"
-#include "Acts/Seeding2/GbtsGeometry.hpp"
-#include "Acts/Seeding2/GbtsTrackingFilter.hpp"
-#include "Acts/Seeding2/GraphBasedTrackSeeder.hpp"
+#include "Acts/Seeding/GbtsGeometry.hpp"
+#include "Acts/Seeding/GbtsTrackingFilter.hpp"
+#include "Acts/Seeding/GraphBasedTrackSeeder.hpp"
 #include "ActsExamples/EventData/Cluster.hpp"
 #include "ActsExamples/EventData/Seed.hpp"
 #include "ActsExamples/EventData/SpacePoint.hpp"
@@ -95,6 +95,12 @@ class GraphBasedSeedingAlgorithm final : public IAlgorithm {
   /// used to assign LayerIds to the GbtsActsMap
   std::map<std::uint32_t, std::uint32_t> m_layerIdMap{};
 
+  /// used to tell if a layer is a strip or pixel layer
+  std::vector<bool> m_isPixelLayer{};
+
+  /// used to define region of interest
+  std::optional<Acts::Experimental::GbtsRoiDescriptor> m_internalRoi;
+
   /// handle that points to the container of input space points
   ReadDataHandle<SpacePointContainer> m_inputSpacePoints{this,
                                                          "InputSpacePoints"};
@@ -108,11 +114,10 @@ class GraphBasedSeedingAlgorithm final : public IAlgorithm {
   /// make the map between ACTS geometry ID's and GBTS geometry ID's
   std::map<ActsIDs, GbtsIDs> makeActsGbtsMap() const;
 
-  /// make the container that holds space points that have been given
-  /// all the variables needed for GBTS algorithm to run
-  Acts::SpacePointContainer2 makeSpContainer(
-      const SpacePointContainer &spacePoints,
-      std::map<ActsIDs, GbtsIDs> map) const;
+  /// Resolve the dense GBTS layer index for a space point, or nullopt if it is
+  /// not part of the GBTS geometry.
+  std::optional<std::uint32_t> gbtsLayerIndex(
+      const ConstSpacePointProxy &spacePoint) const;
 
   /// makes the geometry objects used by GBTS that correspond to the objects in
   /// the connection table for ease these are sometimes called "logical layers"

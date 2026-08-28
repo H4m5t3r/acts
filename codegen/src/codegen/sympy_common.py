@@ -24,6 +24,89 @@ def make_matrix(name, rows, cols, **kwargs):
     )
 
 
+def explicit(x):
+    """Explicit matrix view of a MatrixSymbol (or pass through)."""
+    return x.as_explicit() if hasattr(x, "as_explicit") else x
+
+
+class Derivation:
+    """An ordered sequence of named intermediate expressions.
+
+    `check_same` resolves a name back to closed form, so a hand derived
+    shortcut can be checked against the plain chain rule before it reaches
+    generated code.
+    """
+
+    def __init__(self):
+        self.name_exprs = []
+        self._by_name = {}
+
+    def add(self, name, expr):
+        if isinstance(expr, Matrix):
+            expr = ImmutableMatrix(expr)
+        ne = name_expr(name, expr)
+        self.name_exprs.append(ne)
+        self._by_name[ne.name] = ne.expr
+        return ne
+
+    def resolve(self, expr):
+        subs = list(self._by_name.items())
+        for _ in range(64):
+            new = expr.subs(subs)
+            if new == expr:
+                return sym.expand(new)
+            expr = new
+        raise RuntimeError("named expressions did not resolve")
+
+    def check_same(self, what, expr_a, expr_b):
+        diff = sym.simplify(sym.expand(self.resolve(expr_a) - self.resolve(expr_b)))
+        if any(e != 0 for e in diff):
+            raise AssertionError(f"{what}: shortcut does not match chain rule\n{diff}")
+
+
+class StructuredMatrix:
+    """A symbolic matrix declared as a grid of entry classes.
+
+    A number is a structural constant, a string names the entry's class and
+    becomes a symbol.  The index sets the classes define are read back off the
+    grid rather than restated.
+    """
+
+    def __init__(self, name, spec):
+        cols = {len(row) for row in spec}
+        if len(cols) != 1:
+            raise ValueError(f"{name}: rows of unequal length")
+
+        self.rows = len(spec)
+        self.cols = cols.pop()
+        self.size = self.rows * self.cols
+        self._spec = [list(row) for row in spec]
+
+        symbols = MatrixSymbol(name, self.rows, self.cols)
+        self.matrix = Matrix(
+            [
+                [
+                    symbols[i, j] if isinstance(entry, str) else entry
+                    for j, entry in enumerate(row)
+                ]
+                for i, row in enumerate(self._spec)
+            ]
+        )
+
+    def entries(self, *classes):
+        """(row, column) of every entry in `classes`, in storage order."""
+        return [
+            (i, j)
+            for j in range(self.cols)
+            for i in range(self.rows)
+            if self._spec[i][j] in classes
+        ]
+
+    def flat_index(self, row, col):
+        """Index of an entry in the column major storage."""
+        return row + self.rows * col
+
+
 def name_expr(name, expr):
     if hasattr(expr, "shape"):
         s = sym.MatrixSymbol(name, *expr.shape)
@@ -38,18 +121,71 @@ def find_by_name(name_exprs, name):
     )
 
 
+# Matrix-element access strategies. A strategy is a callable
+# ``(printer, MatrixElement) -> str`` that renders how a single matrix entry is
+# accessed in the generated C++. This is the one genuine point of divergence
+# between the ACTS and detray backends, so it is made pluggable here while the
+# rest of the printer (and all of the symbolic machinery below) stays shared.
+
+
+def flat_index_accessor(printer, expr):
+    """ACTS dialect: flat column-major buffer indexing ``var[i + j*rows]``."""
+    from sympy.printing.precedence import PRECEDENCE
+
+    return "{}[{}]".format(
+        printer.parenthesize(expr.parent, PRECEDENCE["Atom"], strict=True),
+        expr.i + expr.j * expr.parent.shape[0],
+    )
+
+
+def getter_element_accessor(printer, expr):
+    """detray dialect: algebra-abstracted ``getter::element<i, j>(var)``."""
+    from sympy.printing.precedence import PRECEDENCE
+
+    var = printer.parenthesize(expr.parent, PRECEDENCE["Atom"], strict=True)
+    # HACK: This is for the 8x1 path-to-free matrix.
+    if expr.parent.shape[1] == 1 and expr.parent.shape[0] <= 3:
+        return "getter::element<{idx}>({var})".format(var=var, idx=expr.i)
+    return "getter::element<{idx1}, {idx2}>({var})".format(
+        var=var, idx1=expr.i, idx2=expr.j
+    )
+
+
 class MyCXXCodePrinter(CXX17CodePrinter):
+    def __init__(self, *args, element_accessor=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Default to the ACTS flat-index dialect so existing ACTS generators
+        # are byte-for-byte unaffected.
+        self._element_accessor = element_accessor or flat_index_accessor
+
     def _traverse_matrix_indices(self, mat):
         rows, cols = mat.shape
         return ((i, j) for j in range(cols) for i in range(rows))
 
-    def _print_MatrixElement(self, expr):
-        from sympy.printing.precedence import PRECEDENCE
+    def _as_ordered_terms(self, expr, order=None):
+        # A compiler may only contract a multiply into a neighbouring add
+        # within one expression, and it associates left to right, so a sum
+        # folds into fused multiply-adds only if it does not *start* with a
+        # product.  sympy's canonical order routinely puts one first:
+        #
+        #   -H1[1]*Tp2[2] + H1[2]*Tp2[1] + M[20]   ->  fmul, fmsub, fadd
+        #
+        # while the same sum led by its plain term costs one operation less:
+        #
+        #   M[20] - H1[1]*Tp2[2] + H1[2]*Tp2[1]   ->  fmsub, fmadd
+        #
+        # Hoisting the non-product terms to the front is enough to get the
+        # second form.  It changes the order of floating point additions, so
+        # results move in the last bits -- which is why it is done here, in
+        # the printer, and not by rewriting the expressions themselves.
+        terms = super()._as_ordered_terms(expr, order=order)
+        plain = [t for t in terms if not t.is_Mul]
+        if not plain:
+            return terms
+        return plain + [t for t in terms if t.is_Mul]
 
-        return "{}[{}]".format(
-            self.parenthesize(expr.parent, PRECEDENCE["Atom"], strict=True),
-            expr.i + expr.j * expr.parent.shape[0],
-        )
+    def _print_MatrixElement(self, expr):
+        return self._element_accessor(self, expr)
 
     def _print_Pow(self, expr):
         from sympy.core.numbers import equal_valued, Float
@@ -66,7 +202,15 @@ class MyCXXCodePrinter(CXX17CodePrinter):
         return super()._print_Pow(expr)
 
 
+class MyCXXCodePrinterWithoutKnownAssignment(MyCXXCodePrinter):
+    def _print_Assignment(self, expr):
+        if expr.rhs == 0 or expr.rhs == 1:
+            return ""
+        return super()._print_Assignment(expr)
+
+
 cxx_printer = MyCXXCodePrinter()
+cxx_printer_wo_known = MyCXXCodePrinterWithoutKnownAssignment()
 
 
 def inflate_expr(name_expr):
@@ -228,7 +372,13 @@ def my_cse(name_exprs, inflate_deflate=True, simplify=True):
 
 
 def my_expression_print(
-    printer, name_exprs, outputs, run_cse=True, pre_expr_hook=None, post_expr_hook=None
+    printer,
+    name_exprs,
+    outputs,
+    run_cse=True,
+    pre_expr_hook=None,
+    post_expr_hook=None,
+    scalar_outputs_by_pointer=True,
 ):
     if run_cse:
         name_exprs = my_cse(name_exprs, inflate_deflate=True)
@@ -245,15 +395,17 @@ def my_expression_print(
         code = printer.doprint(Assignment(var, expr))
         if var not in outputs:
             if hasattr(expr, "shape"):
-                lines.append(f"T {var}[{np.prod(expr.shape)}];")
+                lines.append(f"std::array<T, {np.prod(expr.shape)}> {var}{{}};")
                 lines.extend(code.split("\n"))
             else:
                 lines.append("const auto " + code)
         else:
             if hasattr(expr, "shape"):
                 lines.extend(code.split("\n"))
-            else:
+            elif scalar_outputs_by_pointer:
                 lines.append("*" + code)
+            else:
+                lines.append(code)
 
         if post_expr_hook is not None:
             code = post_expr_hook(var)
