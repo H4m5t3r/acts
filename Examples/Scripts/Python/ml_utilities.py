@@ -17,26 +17,71 @@ from ml_data_augmentation import helix_poca
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def createNewBeamspots(lower, upper, points_in_xy, radius):
+def createNewBeamspotsXy(lower, upper, points_in_xy, radius):
     """Creates beamspots in the transverse plane distributed in a circular shape by first generating them
     uniformly inside a square and then filtering them to the ones that are within a given
     radius"""
     space = np.linspace(lower, upper, points_in_xy)
+    # space = np.linspace(-25, 25, points_in_xy)
     x, y = np.meshgrid(space, space, indexing="ij")
     square_points = np.stack([x, y], axis=-1)
     mask = np.linalg.norm(square_points, axis=-1) <= radius
+    # mask = np.linalg.norm(square_points, axis=-1) <= 9999999
     circle_points = square_points[mask]
     return circle_points
 
 
-def createRandomBeamspotAndTrackParameters(beamspots, truth_params, noise_scale=0.0):
+def sampleUniformPointsInDisk(radius, n):
+    """Draws n points uniformly distributed inside a disk of the given radius via
+    rejection sampling: candidates are drawn uniformly in the bounding square and
+    those outside the disk are discarded and redrawn."""
+    points = np.empty((0, 2))
+    # Expected acceptance rate of a candidate is pi/4 (area of disk over
+    # bounding square), so oversample accordingly to reduce the number of
+    # rejection loop iterations.
+    acceptance_rate = np.pi / 4
+    while len(points) < n:
+        remaining = n - len(points)
+        n_candidates = int(remaining / acceptance_rate) + 10
+        candidates = np.random.uniform(low=-radius, high=radius, size=(n_candidates, 2))
+        mask = np.linalg.norm(candidates, axis=-1) <= radius
+        points = np.vstack([points, candidates[mask]])
+    return points[:n]
+
+
+def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
+    """Draws n points uniformly distributed inside an ellipsoid with semi-axes
+    x_offset, y_offset, z_offset via rejection sampling: candidates are drawn
+    uniformly in the bounding box and those outside the ellipsoid are discarded
+    and redrawn."""
+    semi_axes = np.array([x_offset, y_offset, z_offset])
+    points = np.empty((0, 3))
+    # Expected acceptance rate of a candidate is pi/6 (volume of ellipsoid over
+    # bounding box), so oversample accordingly to reduce the number of
+    # rejection loop iterations.
+    acceptance_rate = np.pi / 6
+    while len(points) < n:
+        remaining = n - len(points)
+        n_candidates = int(remaining / acceptance_rate) + 10
+        candidates = np.random.uniform(
+            low=-semi_axes, high=semi_axes, size=(n_candidates, 3)
+        )
+        mask = np.sum((candidates / semi_axes) ** 2, axis=-1) <= 1
+        points = np.vstack([points, candidates[mask]])
+    return points[:n]
+
+
+def createRandomBeamspotAndTrackParameters(
+    beamspots,
+    truth_params,
+    return_beamspots=False,
+):
     # Assumed to be 2.0, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
     Bz = 2.0
+    # ACTS: POCA along a straight line, eliminate magnetic field to get the same results
+    # Bz = 0.0
     n = len(truth_params)
-    chosen_beamspots = beamspots[np.random.choice(len(beamspots), size=n)]
-    chosen_beamspots = chosen_beamspots + np.random.uniform(
-        low=-noise_scale, high=noise_scale, size=chosen_beamspots.shape
-    )
+    chosen_beamspots = beamspots
     beamspot_pocas = np.empty((n, 5))
     for i, truth_params_set in enumerate(truth_params):
         beamspot = chosen_beamspots[i]
@@ -44,7 +89,7 @@ def createRandomBeamspotAndTrackParameters(beamspots, truth_params, noise_scale=
         mom = truth_params_set[3:6]
         q = truth_params_set[6]
         reference = np.array([beamspot[0], beamspot[1], 0.0])
-        poca_output = helix_poca(vtx, mom, q, Bz, beamspot, reference)
+        poca_output = helix_poca(vtx, mom, q, Bz, reference)
         beamspot_pocas[i] = (
             poca_output["d0"],
             poca_output["z0"],
@@ -52,6 +97,8 @@ def createRandomBeamspotAndTrackParameters(beamspots, truth_params, noise_scale=
             poca_output["theta"],
             poca_output["qOverP"],
         )
+    if return_beamspots:
+        return beamspot_pocas, chosen_beamspots
     return beamspot_pocas
 
 
