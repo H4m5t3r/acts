@@ -14,7 +14,7 @@ import wandb
 from ml_utilities import (
     MlDataset,
     EarlyStopping,
-    createNewBeamspots,
+    createNewBeamspotsXy,
     createRandomBeamspotAndTrackParameters,
 )
 
@@ -637,7 +637,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
         )
 
-        beamspots = createNewBeamspots(
+        beamspots = createNewBeamspotsXy(
             LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
         )
         distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY
@@ -807,7 +807,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
         test_preds_unscaled_list = []
         test_targets_unscaled_list = []
 
-        beamspots = createNewBeamspots(
+        beamspots = createNewBeamspotsXy(
             LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
         )
         distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY

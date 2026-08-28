@@ -253,22 +253,22 @@ def readExampleRootData():
 
 
 if __name__ == "__main__":
-    v = readExampleRootData()
-    print(v)
+    # v = readExampleRootData()
+    # print(v)
 
-    # SINGLE EVENTS
-    rng = np.random.default_rng(7)
-    vtx = np.array([v["vx"][0], v["vy"][0], v["vz"][0]])
-    pT_ = v["pT"][0]
-    mom = np.array([v["px"][0], v["py"][0], v["pz"][0]])
-    q = v["q"]
-    Bz = 2.0
+    # # SINGLE EVENTS
+    # rng = np.random.default_rng(7)
+    # vtx = np.array([v["vx"][0], v["vy"][0], v["vz"][0]])
+    # pT_ = v["pT"][0]
+    # mom = np.array([v["px"][0], v["py"][0], v["pz"][0]])
+    # q = v["q"]
+    # Bz = 2.0
     ref = np.array([0, 0, 0])
 
-    out = helix_poca(vtx, mom, q, Bz, ref, refine_3d=False)
-    print(out)
+    # out = helix_poca(vtx, mom, q, Bz, ref, refine_3d=False)
+    # print(out)
     # R = out["radius"]
-    sys.exit(0)
+    # sys.exit(0)
 
     # # Claude's test
     # rng = np.random.default_rng(7)
