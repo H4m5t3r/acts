@@ -97,7 +97,7 @@ def runTruthTrackingGsf(
     from acts.examples.root import (
         RootTrackStatesWriter,
         RootTrackSummaryWriter,
-        RootTrackFitterPerformanceWriter,
+        RootTrackParameterPerformanceWriter,
     )
 
     if mode not in ("fatras", "geant4"):
@@ -310,7 +310,7 @@ def runTruthTrackingGsf(
     )
 
     s.addWriter(
-        RootTrackFitterPerformanceWriter(
+        RootTrackParameterPerformanceWriter(
             level=acts.logging.INFO,
             inputTracks="tracks",
             inputParticles="particles_selected",

@@ -12,9 +12,24 @@ import uproot as ur
 import awkward as ak
 import pandas as pd
 from pathlib import Path
-from ml_data_augmentation import helix_poca
+import acts
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+u = acts.UnitConstants
+
+# Reused across calls to createRandomBeamspotAndTrackParameters(): building the
+# propagator/options once avoids re-creating the stepper/context objects for
+# every call.
+_geo_context = acts.GeometryContext.dangerouslyDefaultConstruct()
+_mag_field_context = acts.MagneticFieldContext()
+_field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+_propagator = acts.EigenVoidPropagator(acts.EigenStepper(_field), acts.VoidNavigator())
+_propagator_options = acts.PropagatorPlainOptions(_geo_context, _mag_field_context)
+# The particle hypothesis only affects the mass, which does not enter the
+# vacuum propagation used here (no material interactions), so a fixed pion
+# hypothesis is used regardless of the true particle species.
+_particle_hypothesis = acts.ParticleHypothesis(211, 0.13957 * u.GeV, 1.0)
 
 
 def createNewBeamspotsXy(lower, upper, points_in_xy, radius):
@@ -54,6 +69,8 @@ def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
     x_offset, y_offset, z_offset via rejection sampling: candidates are drawn
     uniformly in the bounding box and those outside the ellipsoid are discarded
     and redrawn."""
+    if x_offset == 0 and y_offset == 0 and z_offset == 0:
+        return np.zeros((n, 3))
     semi_axes = np.array([x_offset, y_offset, z_offset])
     points = np.empty((0, 3))
     # Expected acceptance rate of a candidate is pi/6 (volume of ellipsoid over
@@ -71,15 +88,16 @@ def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
     return points[:n]
 
 
-def createRandomBeamspotAndTrackParameters(
+def trackParameterAndBeamspotPropagation(
     beamspots,
     truth_params,
     return_beamspots=False,
 ):
-    # Assumed to be 2.0, check field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
-    Bz = 2.0
-    # ACTS: POCA along a straight line, eliminate magnetic field to get the same results
-    # Bz = 0.0
+    """Computes each particle's true perigee parameters (d0, z0, phi, theta,
+    qOverP) w.r.t. its assigned beamspot by propagating the particle's
+    helical trajectory (2T solenoidal field, see _field above) to the
+    Acts.PerigeeSurface built at that beamspot, using the real ACTS
+    propagator rather than the analytic approximation in helix_poca()."""
     n = len(truth_params)
     chosen_beamspots = beamspots
     beamspot_pocas = np.empty((n, 5))
@@ -88,15 +106,15 @@ def createRandomBeamspotAndTrackParameters(
         vtx = truth_params_set[:3]
         mom = truth_params_set[3:6]
         q = truth_params_set[6]
-        reference = np.array([beamspot[0], beamspot[1], 0.0])
-        poca_output = helix_poca(vtx, mom, q, Bz, reference)
-        beamspot_pocas[i] = (
-            poca_output["d0"],
-            poca_output["z0"],
-            poca_output["phi"],
-            poca_output["theta"],
-            poca_output["qOverP"],
+
+        pos4 = acts.Vector4(vtx[0], vtx[1], vtx[2], 0.0)
+        qOverP = q / np.linalg.norm(mom)
+        start = acts.BoundTrackParameters.createCurvilinear(
+            pos4, acts.Vector3(*mom), qOverP, None, _particle_hypothesis
         )
+        target = acts.Surface.createPerigee(acts.Vector3(beamspot[0], beamspot[1], 0.0))
+        result = _propagator.propagateToSurface(start, target, _propagator_options)
+        beamspot_pocas[i] = np.array(result.parameters)[:5]
     if return_beamspots:
         return beamspot_pocas, chosen_beamspots
     return beamspot_pocas

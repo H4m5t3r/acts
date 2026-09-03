@@ -15,7 +15,7 @@ from ml_utilities import (
     MlDataset,
     EarlyStopping,
     createNewBeamspotsXy,
-    createRandomBeamspotAndTrackParameters,
+    trackParameterAndBeamspotPropagation,
 )
 
 LOWER = -29
@@ -655,7 +655,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             train_preds_unscaled_list = []
             train_targets_unscaled_list = []
             for X_batch, params_train_batch in train_loader:
-                y_batch = createRandomBeamspotAndTrackParameters(
+                y_batch = trackParameterAndBeamspotPropagation(
                     beamspots,
                     params_train_batch,
                     noise_scale=distance_between_beamspots / 2,
@@ -716,7 +716,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
                 val_preds_unscaled_list = []
                 val_targets_unscaled_list = []
                 for val_X, params_val_batch in val_loader:
-                    val_y = createRandomBeamspotAndTrackParameters(
+                    val_y = trackParameterAndBeamspotPropagation(
                         beamspots, params_val_batch
                     )
                     X_val_gpu = val_X.to(self.device)
@@ -814,7 +814,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
 
         with torch.no_grad():
             for X_test_batch, params_test_batch in test_loader:
-                y_batch = createRandomBeamspotAndTrackParameters(
+                y_batch = trackParameterAndBeamspotPropagation(
                     beamspots,
                     params_test_batch,
                     noise_scale=distance_between_beamspots / 2,
