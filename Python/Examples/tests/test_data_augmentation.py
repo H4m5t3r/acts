@@ -7,7 +7,6 @@ from typing import Optional
 import acts
 import acts.examples
 from acts.examples.root import (
-    RootParticleReader,
     RootSimHitReader,
 )
 import uproot as ur
@@ -26,6 +25,7 @@ def runTruthTracking(
     inputSimHitsPath: Optional[Path] = None,
     decorators=[],
     s: acts.examples.Sequencer = None,
+    n_events: int = 10,
 ):
     from acts.examples.simulation import (
         addParticleGun,
@@ -52,7 +52,7 @@ def runTruthTracking(
     )
 
     s = s or acts.examples.Sequencer(
-        events=100, numThreads=-1, logLevel=acts.logging.INFO
+        events=n_events, numThreads=-1, logLevel=acts.logging.INFO
     )
 
     for d in decorators:
@@ -264,7 +264,6 @@ def sampleUniformPointsIn3D(x_offset: float, y_offset: float, z_offset: float, n
 def vacuumTrackParameterAndBeamspotPropagation(
     beamspots,
     truth_params,
-    return_beamspots=False,
 ):
     geo_context = acts.GeometryContext.dangerouslyDefaultConstruct()
     mag_field_context = acts.MagneticFieldContext()
@@ -294,15 +293,12 @@ def vacuumTrackParameterAndBeamspotPropagation(
         target = acts.Surface.createPerigee(acts.Vector3(beamspot[0], beamspot[1], 0.0))
         result = propagator.propagateToSurface(start, target, propagator_options)
         beamspot_pocas[i] = np.array(result.parameters)[:5]
-    if return_beamspots:
-        return beamspot_pocas, beamspots
     return beamspot_pocas
 
 
-if "__main__" == __name__:
+def test_track_propagation_returns_values():
     srcdir = Path(__file__).resolve().parent.parent.parent.parent
 
-    # ODD
     from acts.examples.odd import getOpenDataDetector
 
     detector = getOpenDataDetector()
@@ -312,15 +308,16 @@ if "__main__" == __name__:
     field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
 
     outputDir = Path.cwd()
+    n = 100
     runTruthTracking(
         trackingGeometry=trackingGeometry,
         field=field,
         digiConfigFile=digiConfigFile,
         outputDir=outputDir,
+        n_events=n,
     ).run()
 
     simulation_data = readExampleRootData(outputDir)
-
     truth_params = np.column_stack(
         [
             simulation_data["vx"],
@@ -341,12 +338,6 @@ if "__main__" == __name__:
     augmented_perigees = vacuumTrackParameterAndBeamspotPropagation(
         beamspots,
         truth_params,
-        return_beamspots=False,
     )
-    augmented_perigees = {
-        "d0": augmented_perigees[:, 0],
-        "z0": augmented_perigees[:, 1],
-        "phi": augmented_perigees[:, 2],
-        "theta": augmented_perigees[:, 3],
-        "qOverP": augmented_perigees[:, 4],
-    }
+    assert augmented_perigees.shape == (len(truth_params), 5)
+    assert np.all(np.isfinite(augmented_perigees))
