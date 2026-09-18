@@ -112,7 +112,9 @@ def trackParameterAndBeamspotPropagation(
         start = acts.BoundTrackParameters.createCurvilinear(
             pos4, acts.Vector3(*mom), qOverP, None, _particle_hypothesis
         )
-        target = acts.Surface.createPerigee(acts.Vector3(beamspot[0], beamspot[1], 0.0))
+        target = acts.Surface.createPerigee(
+            acts.Vector3(beamspot[0], beamspot[1], beamspot[2])
+        )
         result = _propagator.propagateToSurface(start, target, _propagator_options)
         beamspot_pocas[i] = np.array(result.parameters)[:5]
     if return_beamspots:
