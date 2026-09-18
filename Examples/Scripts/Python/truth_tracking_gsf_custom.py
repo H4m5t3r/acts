@@ -157,7 +157,7 @@ def runTruthTrackingGsf(
             ),
             multiplicity=1,
             rnd=rnd,
-            outputDirCsv=outputDir / "csv",
+            # outputDirCsv=outputDir / "csv",
             outputDirRoot=outputDir / "root",
         )
     else:
@@ -189,9 +189,9 @@ def runTruthTrackingGsf(
                 detector,
                 trackingGeometry,
                 field,
-                outputDirCsv=outputDir / "geant4_csv",
-                outputDirRoot=outputDir,
-                outputDirObj=outputDir / "geant4_obj",
+                # outputDirCsv=outputDir / "geant4_csv",
+                # outputDirRoot=outputDir,
+                # outputDirObj=outputDir / "geant4_obj",
                 rnd=rnd,
                 materialMappings=["Silicon"],
                 volumeMappings=[],
@@ -218,7 +218,7 @@ def runTruthTrackingGsf(
         field,
         digiConfigFile=digiConfigFile,
         rnd=rnd,
-        outputDirCsv=outputDir / "csv",
+        # outputDirCsv=outputDir / "csv",
         outputDirRoot=outputDir / "root",
     )
 
