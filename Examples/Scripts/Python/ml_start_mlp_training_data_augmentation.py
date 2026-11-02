@@ -38,6 +38,11 @@ parser.add_argument("--neurons", type=int, default=32)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--load_model", type=int, default=0)
 parser.add_argument("--mini_data", type=int, default=0)
+# Seed for the weight initialization (and data shuffling/beamspot sampling).
+# Runs with the same configuration but different seeds are stored side by side.
+# A random seed is drawn if not given. Required with --load_model 1 to select
+# which run to load.
+parser.add_argument("--seed", type=int, default=None)
 args = parser.parse_args()
 
 MODEL_TYPE = "MLP"
@@ -56,6 +61,9 @@ N_HIDDEN_LAYERS = args.hidden
 HIDDEN_DIM = args.neurons
 LOAD_PREV_MODEL = bool(args.load_model)
 MINI_DATA = bool(args.mini_data)
+if LOAD_PREV_MODEL and args.seed is None:
+    parser.error("--seed is required with --load_model 1 to select the run to load")
+SEED = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
 
 BASE_DIR = co.BASE_DIR
 RUN_DIR = os.path.join(BASE_DIR, "runs")
@@ -101,29 +109,25 @@ CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
 )
 MODEL_FILE_NAME_ENDING = CONFIG_FILE_NAME_EXTENSION + ".pt"
 
-if MINI_DATA:
-    FIGURES_DIR = os.path.join(RUN_DIR, "mini_mlp" + CONFIG_FILE_NAME_EXTENSION)
-    MODEL_SAVE_PATH = os.path.join(
-        RUN_DIR,
-        os.path.join(
-            "mini_mlp" + CONFIG_FILE_NAME_EXTENSION, "mini_mlp" + MODEL_FILE_NAME_ENDING
-        ),
-    )
-    WANDB_PROJECT_NAME = "Mini MLP SHIPPING"
-else:
-    FIGURES_DIR = os.path.join(RUN_DIR, "mega_mlp" + CONFIG_FILE_NAME_EXTENSION)
-    MODEL_SAVE_PATH = os.path.join(
-        RUN_DIR,
-        os.path.join(
-            "mega_mlp" + CONFIG_FILE_NAME_EXTENSION, "mega_mlp" + MODEL_FILE_NAME_ENDING
-        ),
-    )
-    WANDB_PROJECT_NAME = "Mega MLP SHIPPING"
-print(MODEL_SAVE_PATH)
+DATA_PREFIX = "mini" if MINI_DATA else "mega"
+WANDB_PROJECT_NAME = "Mini MLP SHIPPING" if MINI_DATA else "Mega MLP SHIPPING"
+# One directory per model configuration, with one subdirectory per run (seed)
+# holding that run's model and figures:
+# runs/<mini|mega>_mlp<config>/seed_<seed>/
+CONFIG_NAME = DATA_PREFIX + "_mlp" + CONFIG_FILE_NAME_EXTENSION
+CONFIG_DIR = os.path.join(RUN_DIR, CONFIG_NAME)
+RUN_NAME = "seed_{}".format(SEED)
+FIGURES_DIR = os.path.join(CONFIG_DIR, RUN_NAME)
+MODEL_SAVE_PATH = os.path.join(
+    FIGURES_DIR, DATA_PREFIX + "_mlp" + MODEL_FILE_NAME_ENDING
+)
+# 'spawn' DataLoader workers re-run this module with their own (unused) random
+# SEED, so only the main process prints the run's model path
+if __name__ == "__main__":
+    print(MODEL_SAVE_PATH)
 # Shared between runs on the same dataset, since fitting the augmented output
 # scaler requires propagating the training tracks. The output scaler is kept
 # separate from the non-augmented one, as d0 is much wider with augmentation.
-DATA_PREFIX = "mini" if MINI_DATA else "mega"
 INPUT_SCALER_PATH = os.path.join(RUN_DIR, DATA_PREFIX + "_input_scaler.joblib")
 OUTPUT_SCALER_PATH = os.path.join(
     RUN_DIR, DATA_PREFIX + "_output_scaler_augmented.joblib"
@@ -161,16 +165,24 @@ def trainMlpModel(
     print("Hidden layers: {}".format(str(N_HIDDEN_LAYERS)))
     print("Hidden layer size: {}".format(str(HIDDEN_DIM)))
 
+    print("Run seed:", SEED)
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+
     print("Initializing wandb project")
     project_name = "Debugging" if co.TEST_ENV else WANDB_PROJECT_NAME
     # run_name = "MLP_{}h_{}n_{}lr".format(str(N_HIDDEN_LAYERS), str(HIDDEN_DIM), str(LEARNING_RATE))
-    run_name = "MLP{}".format(CONFIG_FILE_NAME_EXTENSION)
+    run_name = "MLP{}_{}".format(CONFIG_FILE_NAME_EXTENSION, RUN_NAME)
     # run = wandb.init(project=MEGA_WANDB_PROJECT_NAME, name=run_name, config={
     # run = wandb.init(project="Debugging", name="Debug", config={
     run = wandb.init(
         project=project_name,
         name=run_name,
+        # Runs with the same configuration but different seeds are grouped
+        group="MLP{}".format(CONFIG_FILE_NAME_EXTENSION),
         config={
+            "seed": SEED,
             "epochs": N_EPOCHS,
             # "batch_size": 64,
             "learning_rate": LEARNING_RATE,
@@ -295,10 +307,13 @@ def trainMlpModel(
 
 
 if __name__ == "__main__":
-    try:
-        os.makedirs(FIGURES_DIR)
-    except:
-        print("Mega figures directory already exists")
+    if not LOAD_PREV_MODEL and os.path.exists(MODEL_SAVE_PATH):
+        sys.exit(
+            "ERROR: {} already exists. Use another --seed to avoid overwriting it.".format(
+                MODEL_SAVE_PATH
+            )
+        )
+    os.makedirs(FIGURES_DIR, exist_ok=True)
 
     # debug_dirs = [os.path.join(ACTS_DIR, dir) for dir in ["debug_data/debug_data_0/electron/geant4/train_100", "debug_data/debug_data_1/electron/geant4/train_100"]]
     # debug_dirs = [os.path.join(ACTS_DIR, dir) for dir in ["debug_data/debug_data_2/electron/geant4/train_100", "debug_data/debug_data_3/electron/geant4/train_100"]]
