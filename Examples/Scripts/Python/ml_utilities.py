@@ -65,29 +65,19 @@ def sampleUniformPointsInDisk(radius, n):
 
 
 def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
-    """Draws n points uniformly distributed inside an ellipsoid with semi-axes
-    x_offset, y_offset, z_offset via rejection sampling: candidates are drawn
-    uniformly in the bounding box and those outside the ellipsoid are discarded
-    and redrawn."""
-    if x_offset == 0 and y_offset == 0 and z_offset == 0:
-        return np.zeros((n, 3))
-    semi_axes = np.array([x_offset, y_offset, z_offset])
-    nonzero = semi_axes != 0
-    points = np.empty((0, 3))
-    # Expected acceptance rate of a candidate is pi/6 (volume of ellipsoid over
-    # bounding box), so oversample accordingly to reduce the number of
-    # rejection loop iterations.
-    acceptance_rate = np.pi / 6
-    while len(points) < n:
-        remaining = n - len(points)
-        n_candidates = int(remaining / acceptance_rate) + 10
-        candidates = np.random.uniform(
-            low=-semi_axes, high=semi_axes, size=(n_candidates, 3)
-        )
-        # mask = np.sum((candidates / semi_axes) ** 2, axis=-1) <= 1
-        mask = np.sum((candidates[:, nonzero] / semi_axes[nonzero]) ** 2, axis=-1) <= 1
-        points = np.vstack([points, candidates[mask]])
-    return points[:n]
+    """Draws n points uniformly distributed inside a cylinder along the z-axis
+    (the beamline). x_offset and y_offset are the transverse radii (equal values
+    give a circular cross-section) and z_offset is the half-length, so
+    |z| <= z_offset. Zero offsets collapse the corresponding dimension."""
+    # Uniform in the unit disk: the radius goes as sqrt(u) since the area
+    # element grows linearly with r. Stretching the unit disk by the radii
+    # keeps the distribution uniform in the elliptical cross-section.
+    r = np.sqrt(np.random.uniform(0, 1, n))
+    angle = np.random.uniform(0, 2 * np.pi, n)
+    x = x_offset * r * np.cos(angle)
+    y = y_offset * r * np.sin(angle)
+    z = np.random.uniform(-z_offset, z_offset, n)
+    return np.column_stack([x, y, z])
 
 
 def trackParameterAndBeamspotPropagation(
@@ -192,9 +182,10 @@ class DataHandler:
         augmentation_semi_axes=None,
         augmentation_max_tracks_per_dir: int = None,
     ):
-        """If augmentation_semi_axes (beamspot sampling ellipsoid semi-axes in mm)
-        is given, the output scaler is fitted on perigee parameters propagated to
-        beamspots sampled in that ellipsoid instead of to the origin, see
+        """If augmentation_semi_axes (beamspot sampling cylinder x/y radii and z
+        half-length in mm, see sampleUniformPointsIn3D()) is given, the output
+        scaler is fitted on perigee parameters propagated to beamspots sampled in
+        that cylinder instead of to the origin, see
         createAugmentedParameterOutputScaler()."""
         if load_data_scalers:
             if not (input_scaler_path and output_scaler_path):
@@ -636,7 +627,7 @@ class DataHandler:
         self, semi_axes, max_tracks_per_dir=None, seed=0
     ):
         """Fits the output scaler on perigee parameters w.r.t. beamspots sampled
-        uniformly in the ellipsoid with the given semi-axes, i.e. on the same
+        uniformly in the cylinder with the given semi-axes, i.e. on the same
         distribution the data augmentation produces during training. Moving the
         beamspot widens d0 considerably compared to the fixed (0, 0, 0)
         beamspot, so the scaler fitted on the original data doesn't fit here.

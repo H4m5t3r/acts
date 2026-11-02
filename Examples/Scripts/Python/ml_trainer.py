@@ -30,9 +30,11 @@ X_OFFSET = 0.1
 Y_OFFSET = 0.1
 Z_OFFSET = 10
 NOISE = np.array([X_OFFSET, Y_OFFSET, Z_OFFSET])
-# Standard deviation of each coordinate for points uniform in an ellipsoid with
-# semi-axes NOISE (variance a^2/5). Zero axes get scale 1 to avoid division by 0.
-BEAMSPOT_SCALE = np.where(NOISE != 0, NOISE / np.sqrt(5), 1.0)
+# Standard deviation of each coordinate for points uniform in the cylinder of
+# sampleUniformPointsIn3D(): radius/2 in x and y (uniform disk) and
+# half-length/sqrt(3) in z (uniform interval). Zero offsets get scale 1 to avoid
+# division by 0.
+BEAMSPOT_SCALE = np.where(NOISE != 0, NOISE / np.array([2, 2, np.sqrt(3)]), 1.0)
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
