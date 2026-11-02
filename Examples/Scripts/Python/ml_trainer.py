@@ -15,7 +15,6 @@ import wandb
 from ml_utilities import (
     MlDataset,
     EarlyStopping,
-    createNewBeamspotsXy,
     sampleUniformPointsIn3D,
     trackParameterAndBeamspotPropagation,
 )
@@ -29,7 +28,7 @@ DISTRIBUTION_RADIUS = 25
 # 3D beamspots
 X_OFFSET = 1.0
 Y_OFFSET = 1.0
-Z_OFFSET = 10
+Z_OFFSET = 10.0
 NOISE = np.array([X_OFFSET, Y_OFFSET, Z_OFFSET])
 # Standard deviation of each coordinate for points uniform in the cylinder of
 # sampleUniformPointsIn3D(): radius/2 in x and y (uniform disk) and
