@@ -239,23 +239,19 @@ def readExampleRootData(outputDir: Path):
 
 
 def sampleUniformPointsIn3D(x_offset: float, y_offset: float, z_offset: float, n: int):
-    if x_offset == 0 and y_offset == 0 and z_offset == 0:
-        return np.zeros((n, 3))
-    semi_axes = np.array([x_offset, y_offset, z_offset])
-    points = np.empty((0, 3))
-    # Expected acceptance rate of a candidate is pi/6 (volume of ellipsoid over
-    # bounding box), so oversample accordingly to reduce the number of
-    # rejection loop iterations.
-    acceptance_rate = np.pi / 6
-    while len(points) < n:
-        remaining = n - len(points)
-        n_candidates = int(remaining / acceptance_rate) + 10
-        candidates = np.random.uniform(
-            low=-semi_axes, high=semi_axes, size=(n_candidates, 3)
-        )
-        mask = np.sum((candidates / semi_axes) ** 2, axis=-1) <= 1
-        points = np.vstack([points, candidates[mask]])
-    return points[:n]
+    """Draws n points uniformly distributed inside a cylinder along the z-axis
+    (the beamline). x_offset and y_offset are the transverse radii (equal values
+    give a circular cross-section) and z_offset is the half-length, so
+    |z| <= z_offset. Zero offsets collapse the corresponding dimension."""
+    # Uniform in the unit disk: the radius goes as sqrt(u) since the area
+    # element grows linearly with r. Stretching the unit disk by the radii
+    # keeps the distribution uniform in the elliptical cross-section.
+    r = np.sqrt(np.random.uniform(0, 1, n))
+    angle = np.random.uniform(0, 2 * np.pi, n)
+    x = x_offset * r * np.cos(angle)
+    y = y_offset * r * np.sin(angle)
+    z = np.random.uniform(-z_offset, z_offset, n)
+    return np.column_stack([x, y, z])
 
 
 def vacuumTrackParameterAndBeamspotPropagation(
