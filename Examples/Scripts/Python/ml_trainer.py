@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from torch.nn import Module
 
+import os
 import sys
 import numpy as np
 import torch.optim as optim
@@ -641,7 +642,48 @@ class OrigoBeamspotTrainer(MlTrainer):
         wandb.log(test_log)
 
 
+class BeamspotPropagationCollate:
+    """DataLoader collate_fn that samples a new beamspot per particle and
+    propagates the particle to its perigee at that beamspot. Running it in
+    DataLoader workers keeps the CPU-bound ACTS propagation of upcoming batches
+    going while the main process trains on the current one. Defined at module
+    level so it can be pickled for the 'spawn' worker start method."""
+
+    def __init__(self, semi_axes, output_scaler):
+        self.semi_axes = semi_axes
+        self.output_scaler = output_scaler
+
+    def __call__(self, samples):
+        X_batch = torch.stack([X for X, _ in samples])
+        particle_truth_batch = torch.stack([truth for _, truth in samples])
+        beamspots = sampleUniformPointsIn3D(*self.semi_axes, len(samples))
+        y = trackParameterAndBeamspotPropagation(beamspots, particle_truth_batch)
+        y = self.output_scaler.transform(y)
+        return (
+            X_batch,
+            torch.as_tensor(beamspots, dtype=torch.float32),
+            torch.as_tensor(y, dtype=torch.float32),
+        )
+
+
+def seedBeamspotWorker(worker_id):
+    """Gives every DataLoader worker its own seed for the numpy generator used
+    by sampleUniformPointsIn3D(). torch derives a distinct per-worker seed from
+    its own generator, so runs with torch.manual_seed() are reproducible."""
+    np.random.seed(torch.initial_seed() % 2**32)
+
+
 class ArbitraryBeamspotTrainer(MlTrainer):
+    def __init__(self, *args, num_workers=None, **kwargs):
+        """num_workers: DataLoader worker processes doing the beamspot sampling
+        and propagation for the training batches. None uses all CPU cores but
+        one, which is left for the main training process. 0 propagates in the
+        main process."""
+        super().__init__(*args, **kwargs)
+        if num_workers is None:
+            num_workers = max((os.cpu_count() or 1) - 1, 0)
+        self.num_workers = num_workers
+
     def _propagateTargets(self, beamspots, particle_truth):
         """Propagates the true particle parameters to perigees at the given
         beamspots and returns them scaled with the output scaler as a float32
@@ -667,8 +709,17 @@ class ArbitraryBeamspotTrainer(MlTrainer):
 
     def train(self, model, X_train, train_particle_truth, X_val, val_particle_truth):
         train_dataset = MlDataset(X_train, train_particle_truth)
+        print(f"Propagating training batches in {self.num_workers} DataLoader workers")
         train_loader = DataLoader(
-            train_dataset, batch_size=self.batch_size, shuffle=True
+            train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            collate_fn=BeamspotPropagationCollate(NOISE, self.output_scaler),
+            num_workers=self.num_workers,
+            worker_init_fn=seedBeamspotWorker,
+            # Keeps the workers (and their ACTS imports) alive between epochs
+            persistent_workers=self.num_workers > 0,
+            pin_memory=self.device.type == "cuda",
         )
 
         val_dataset = self._createFixedBeamspotDataset(
@@ -698,17 +749,11 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             # collectors for variance ratio computation (unscaled)
             train_preds_unscaled_list = []
             train_targets_unscaled_list = []
-            for X_batch, particle_truth_batch in train_loader:
-                batch_new_beamspots = sampleUniformPointsIn3D(
-                    X_OFFSET, Y_OFFSET, Z_OFFSET, X_batch.shape[0]
-                )
-                y_train_gpu = self._propagateTargets(
-                    batch_new_beamspots, particle_truth_batch
-                )
-                X_train_gpu = X_batch.to(self.device)
-                beamspots_gpu = torch.as_tensor(
-                    batch_new_beamspots, dtype=torch.float32, device=self.device
-                )
+            # Beamspots and scaled targets come from BeamspotPropagationCollate
+            for X_batch, beamspots_batch, y_batch in train_loader:
+                X_train_gpu = X_batch.to(self.device, non_blocking=True)
+                beamspots_gpu = beamspots_batch.to(self.device, non_blocking=True)
+                y_train_gpu = y_batch.to(self.device, non_blocking=True)
                 optimizer.zero_grad()
                 outputs = self.getModelOutputs(model, X_train_gpu, beamspots_gpu)
                 loss = self.criterion(outputs, y_train_gpu)
