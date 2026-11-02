@@ -72,6 +72,7 @@ def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
     if x_offset == 0 and y_offset == 0 and z_offset == 0:
         return np.zeros((n, 3))
     semi_axes = np.array([x_offset, y_offset, z_offset])
+    nonzero = semi_axes != 0
     points = np.empty((0, 3))
     # Expected acceptance rate of a candidate is pi/6 (volume of ellipsoid over
     # bounding box), so oversample accordingly to reduce the number of
@@ -83,14 +84,15 @@ def sampleUniformPointsIn3D(x_offset, y_offset, z_offset, n):
         candidates = np.random.uniform(
             low=-semi_axes, high=semi_axes, size=(n_candidates, 3)
         )
-        mask = np.sum((candidates / semi_axes) ** 2, axis=-1) <= 1
+        # mask = np.sum((candidates / semi_axes) ** 2, axis=-1) <= 1
+        mask = np.sum((candidates[:, nonzero] / semi_axes[nonzero]) ** 2, axis=-1) <= 1
         points = np.vstack([points, candidates[mask]])
     return points[:n]
 
 
 def trackParameterAndBeamspotPropagation(
-    beamspots,
-    truth_params,
+    new_beamspots,
+    particle_truth,
     return_beamspots=False,
 ):
     """Computes each particle's true perigee parameters (d0, z0, phi, theta,
@@ -98,10 +100,13 @@ def trackParameterAndBeamspotPropagation(
     helical trajectory (2T solenoidal field, see _field above) to the
     Acts.PerigeeSurface built at that beamspot, using the real ACTS
     propagator rather than the analytic approximation in helix_poca()."""
-    n = len(truth_params)
-    chosen_beamspots = beamspots
+    # Accept torch tensors coming straight from a DataLoader as well
+    particle_truth = np.asarray(particle_truth, dtype=np.float64)
+    new_beamspots = np.asarray(new_beamspots, dtype=np.float64)
+    n = len(particle_truth)
+    chosen_beamspots = new_beamspots
     beamspot_pocas = np.empty((n, 5))
-    for i, truth_params_set in enumerate(truth_params):
+    for i, truth_params_set in enumerate(particle_truth):
         beamspot = chosen_beamspots[i]
         vtx = truth_params_set[:3]
         mom = truth_params_set[3:6]
@@ -184,7 +189,13 @@ class DataHandler:
         load_data_scalers: bool = True,
         input_scaler_path: Path = None,
         output_scaler_path: Path = None,
+        augmentation_semi_axes=None,
+        augmentation_max_tracks_per_dir: int = None,
     ):
+        """If augmentation_semi_axes (beamspot sampling ellipsoid semi-axes in mm)
+        is given, the output scaler is fitted on perigee parameters propagated to
+        beamspots sampled in that ellipsoid instead of to the origin, see
+        createAugmentedParameterOutputScaler()."""
         if load_data_scalers:
             if not (input_scaler_path and output_scaler_path):
                 sys.exit(
@@ -200,23 +211,32 @@ class DataHandler:
         print("DataHandler outlier roof: {}".format(self.outlier_roof))
         self.train_data_dirs = train_data_dirs
         self.poca_columns = ["d0", "z0", "phi", "theta", "q_over_p"]
+        # Column order expected by trackParameterAndBeamspotPropagation()
+        self.particle_truth_columns = ["vx", "vy", "vz", "px", "py", "pz", "q"]
+        self.augmentation_semi_axes = (
+            None
+            if augmentation_semi_axes is None
+            else np.asarray(augmentation_semi_axes, dtype=np.float64)
+        )
+        self.augmentation_max_tracks_per_dir = augmentation_max_tracks_per_dir
         if load_data_scalers:
             try:
                 print("Trying to load data scalers from previous runs...")
                 self.input_scaler = self.loadScaler(input_scaler_path)
                 self.output_scaler = self.loadScaler(output_scaler_path)
+                self.checkOutputScalerAugmentation(self.output_scaler)
                 print("Successfully loaded input and output data scalers.")
-            except:
+            except Exception as exc:
                 print(
-                    "Couldn't load data scalers. Creating new ones instead and saving them."
+                    f"Couldn't load data scalers ({exc}). Creating new ones instead and saving them."
                 )
                 self.input_scaler = self.createInputScaler()
-                self.output_scaler = self.createParameterOutputScaler()
+                self.output_scaler = self.createOutputScaler()
                 self.saveScaler(self.input_scaler, input_scaler_path)
                 self.saveScaler(self.output_scaler, output_scaler_path)
         else:
             self.input_scaler = self.createInputScaler()
-            self.output_scaler = self.createParameterOutputScaler()
+            self.output_scaler = self.createOutputScaler()
             self.saveScaler(self.input_scaler, input_scaler_path)
             self.saveScaler(self.output_scaler, output_scaler_path)
 
@@ -451,6 +471,37 @@ class DataHandler:
 
         return tracksummary_df
 
+    def createParticleTruthDf(self, data_dir):
+        """Reads each particle's true vertex, momentum and charge with the same
+        filtering as createPOCAParameterDf(), so the rows line up with readX()."""
+        tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
+        branches = ["t_vx", "t_vy", "t_vz", "t_px", "t_py", "t_pz", "t_charge"]
+        particle_truth_df = pd.DataFrame(
+            {
+                "event_id": ak.to_numpy(
+                    tracksummary_tree["event_nr"].array()[combined_filter]
+                ).squeeze(),
+                **{
+                    column: ak.to_numpy(
+                        tracksummary_tree[branch].array()[combined_filter]
+                    ).squeeze()
+                    for column, branch in zip(self.particle_truth_columns, branches)
+                },
+            }
+        )
+        return particle_truth_df
+
+    def readParticleTruth(self, data_dirs=None):
+        """Returns an (n, 7) array of [vx, vy, vz, px, py, pz, q] per particle,
+        the input format of trackParameterAndBeamspotPropagation()."""
+        if data_dirs is None:
+            data_dirs = self.train_data_dirs
+        print("Reading particle truth dfs")
+        truth_dfs = [self.createParticleTruthDf(dir) for dir in data_dirs]
+        return np.concatenate(
+            [df[self.particle_truth_columns].to_numpy() for df in truth_dfs]
+        )
+
     def createFilterTrackSummaryDf(self, data_dir):
         tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
         tracksummary_df = pd.DataFrame(
@@ -573,6 +624,67 @@ class DataHandler:
             output_scaler.partial_fit(particle_df)
         print("Columns used for output scaling:", output_columns_to_normalize)
         return output_scaler
+
+    def createOutputScaler(self):
+        if self.augmentation_semi_axes is None:
+            return self.createParameterOutputScaler()
+        return self.createAugmentedParameterOutputScaler(
+            self.augmentation_semi_axes, self.augmentation_max_tracks_per_dir
+        )
+
+    def createAugmentedParameterOutputScaler(
+        self, semi_axes, max_tracks_per_dir=None, seed=0
+    ):
+        """Fits the output scaler on perigee parameters w.r.t. beamspots sampled
+        uniformly in the ellipsoid with the given semi-axes, i.e. on the same
+        distribution the data augmentation produces during training. Moving the
+        beamspot widens d0 considerably compared to the fixed (0, 0, 0)
+        beamspot, so the scaler fitted on the original data doesn't fit here.
+        max_tracks_per_dir limits the number of (slow) propagations per data
+        directory; None uses all tracks."""
+        print("Creating augmented POCA output scaler")
+        semi_axes = np.asarray(semi_axes, dtype=np.float64)
+        rng = np.random.default_rng(seed)
+        output_scaler = StandardScaler()
+        for data_dir in self.train_data_dirs:
+            particle_truth = self.readParticleTruth([data_dir])
+            if (
+                max_tracks_per_dir is not None
+                and len(particle_truth) > max_tracks_per_dir
+            ):
+                subset = rng.choice(
+                    len(particle_truth), max_tracks_per_dir, replace=False
+                )
+                particle_truth = particle_truth[subset]
+            # Reseed the global generator used by sampleUniformPointsIn3D() for
+            # reproducibility without changing its state for the caller
+            rng_state = np.random.get_state()
+            np.random.seed(rng.integers(2**32))
+            beamspots = sampleUniformPointsIn3D(*semi_axes, len(particle_truth))
+            np.random.set_state(rng_state)
+            output_scaler.partial_fit(
+                trackParameterAndBeamspotPropagation(beamspots, particle_truth)
+            )
+        # Stored so a loaded scaler can be checked against the current settings
+        output_scaler.augmentation_semi_axes_ = semi_axes
+        print("Columns used for output scaling:", self.poca_columns)
+        return output_scaler
+
+    def checkOutputScalerAugmentation(self, output_scaler):
+        """Raises if a loaded output scaler was fitted for different beamspot
+        augmentation settings than the ones this DataHandler uses."""
+        loaded_semi_axes = getattr(output_scaler, "augmentation_semi_axes_", None)
+        if self.augmentation_semi_axes is None and loaded_semi_axes is None:
+            return
+        if (
+            self.augmentation_semi_axes is None
+            or loaded_semi_axes is None
+            or not np.allclose(loaded_semi_axes, self.augmentation_semi_axes)
+        ):
+            raise ValueError(
+                f"loaded output scaler was fitted with augmentation semi-axes "
+                f"{loaded_semi_axes}, expected {self.augmentation_semi_axes}"
+            )
 
     def getInputScaler(self):
         return self.input_scaler

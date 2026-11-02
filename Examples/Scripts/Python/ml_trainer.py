@@ -8,25 +8,47 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 import wandb
 from ml_utilities import (
     MlDataset,
     EarlyStopping,
     createNewBeamspotsXy,
+    sampleUniformPointsIn3D,
     trackParameterAndBeamspotPropagation,
 )
 
-LOWER = -29
-UPPER = 29
+# 2D beamspots
+AUGMENTATION_LOWER = -29
+AUGMENTATION_UPPER = 29
 N_POINTS_IN_XY = 40
 DISTRIBUTION_RADIUS = 25
+
+# 3D beamspots
+X_OFFSET = 0.1
+Y_OFFSET = 0.1
+Z_OFFSET = 10
+NOISE = np.array([X_OFFSET, Y_OFFSET, Z_OFFSET])
+# Standard deviation of each coordinate for points uniform in an ellipsoid with
+# semi-axes NOISE (variance a^2/5). Zero axes get scale 1 to avoid division by 0.
+BEAMSPOT_SCALE = np.where(NOISE != 0, NOISE / np.sqrt(5), 1.0)
+
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def getMlpOutputs(model, X_gpu, max_seq_len=None, device=None):
     return model(X_gpu)  # .squeeze()
+
+
+def getAugmentedMlpOutputs(model, X_gpu, beamspots):
+    """Beamspots are given in mm and standardised here with BEAMSPOT_SCALE so
+    they are on the same footing as the standardised hit coordinates."""
+    beamspot_scale = torch.as_tensor(
+        BEAMSPOT_SCALE, dtype=beamspots.dtype, device=beamspots.device
+    )
+    mlp_input = torch.cat((X_gpu, beamspots / beamspot_scale), dim=1)
+    return model(mlp_input)
 
 
 def getTransformerOutputs(model, X_gpu, max_seq_len, device):
@@ -38,7 +60,7 @@ def getTransformerOutputs(model, X_gpu, max_seq_len, device):
     return outputs
 
 
-def createCosineTailSchedulerWithWarmup(self, optimizer, total_steps, warmup_steps):
+def createCosineTailSchedulerWithWarmup(optimizer, total_steps, warmup_steps):
     scheduler = SequentialLR(
         optimizer,
         schedulers=[
@@ -618,13 +640,38 @@ class OrigoBeamspotTrainer(MlTrainer):
 
 
 class ArbitraryBeamspotTrainer(MlTrainer):
-    def train(self, model, X_train, train_params, X_val, val_params):
-        train_dataset = MlDataset(X_train, train_params)
+    def _propagateTargets(self, beamspots, particle_truth):
+        """Propagates the true particle parameters to perigees at the given
+        beamspots and returns them scaled with the output scaler as a float32
+        tensor on self.device, matching what the loss functions expect."""
+        y = trackParameterAndBeamspotPropagation(beamspots, particle_truth)
+        y = self.output_scaler.transform(y)
+        return torch.as_tensor(y, dtype=torch.float32, device=self.device)
+
+    def _createFixedBeamspotDataset(self, X, particle_truth, seed):
+        """Samples one beamspot per particle with a fixed seed and precomputes the
+        propagated targets, so validation/test losses are comparable between
+        epochs instead of fluctuating with freshly sampled beamspots."""
+        rng_state = np.random.get_state()
+        np.random.seed(seed)
+        beamspots = sampleUniformPointsIn3D(X_OFFSET, Y_OFFSET, Z_OFFSET, len(X))
+        np.random.set_state(rng_state)
+        y = self._propagateTargets(beamspots, particle_truth).cpu()
+        return TensorDataset(
+            torch.as_tensor(X, dtype=torch.float32),
+            torch.as_tensor(beamspots, dtype=torch.float32),
+            y,
+        )
+
+    def train(self, model, X_train, train_particle_truth, X_val, val_particle_truth):
+        train_dataset = MlDataset(X_train, train_particle_truth)
         train_loader = DataLoader(
             train_dataset, batch_size=self.batch_size, shuffle=True
         )
 
-        val_dataset = MlDataset(X_val, val_params)
+        val_dataset = self._createFixedBeamspotDataset(
+            X_val, val_particle_truth, seed=0
+        )
         val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
 
         early_stopper = EarlyStopping(self.model_save_path, patience=3000, verbose=True)
@@ -636,11 +683,6 @@ class ArbitraryBeamspotTrainer(MlTrainer):
         scheduler = createCosineTailSchedulerWithWarmup(
             optimizer, total_steps=tot_steps, warmup_steps=int(0.02 * tot_steps)
         )
-
-        beamspots = createNewBeamspotsXy(
-            LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
-        )
-        distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY
 
         print("Starting training loop")
         for epoch in range(self.n_epochs):
@@ -654,18 +696,19 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             # collectors for variance ratio computation (unscaled)
             train_preds_unscaled_list = []
             train_targets_unscaled_list = []
-            for X_batch, params_train_batch in train_loader:
-                y_batch = trackParameterAndBeamspotPropagation(
-                    beamspots,
-                    params_train_batch,
-                    noise_scale=distance_between_beamspots / 2,
+            for X_batch, particle_truth_batch in train_loader:
+                batch_new_beamspots = sampleUniformPointsIn3D(
+                    X_OFFSET, Y_OFFSET, Z_OFFSET, X_batch.shape[0]
+                )
+                y_train_gpu = self._propagateTargets(
+                    batch_new_beamspots, particle_truth_batch
                 )
                 X_train_gpu = X_batch.to(self.device)
-                y_train_gpu = y_batch.to(self.device)
-                optimizer.zero_grad()
-                outputs = self.getModelOutputs(
-                    model, X_train_gpu, self.max_seq_len, self.device
+                beamspots_gpu = torch.as_tensor(
+                    batch_new_beamspots, dtype=torch.float32, device=self.device
                 )
+                optimizer.zero_grad()
+                outputs = self.getModelOutputs(model, X_train_gpu, beamspots_gpu)
                 loss = self.criterion(outputs, y_train_gpu)
                 # collect unscaled predictions and targets for variance ratio
                 pred_unscaled_batch, y_unscaled_batch = self._unscale_tensors(
@@ -690,7 +733,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
                 # so it can be divided by the length of the dataset (n samples) later
                 tot_train_loss += loss.item() * X_batch.shape[0]
                 aver_unscaled_loss = self.getUnscaledLoss(
-                    self.criterion, outputs, y_batch
+                    self.criterion, outputs, y_train_gpu
                 )
                 tot_train_loss_unscaled += aver_unscaled_loss * X_batch.shape[0]
 
@@ -715,20 +758,18 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             with torch.no_grad():
                 val_preds_unscaled_list = []
                 val_targets_unscaled_list = []
-                for val_X, params_val_batch in val_loader:
-                    val_y = trackParameterAndBeamspotPropagation(
-                        beamspots, params_val_batch
-                    )
+                for val_X, val_beamspots, val_y in val_loader:
                     X_val_gpu = val_X.to(self.device)
+                    beamspots_val_gpu = val_beamspots.to(self.device)
                     y_val_gpu = val_y.to(self.device)
                     val_outputs = self.getModelOutputs(
-                        model, X_val_gpu, self.max_seq_len, self.device
+                        model, X_val_gpu, beamspots_val_gpu
                     )
                     val_loss = self.criterion(val_outputs, y_val_gpu).item()
                     tot_val_loss += val_loss * val_X.shape[0]
 
                     aver_unscaled_val_loss = self.getUnscaledLoss(
-                        self.criterion, val_outputs, val_y
+                        self.criterion, val_outputs, y_val_gpu
                     )
                     tot_val_loss_unscaled += aver_unscaled_val_loss * val_X.shape[0]
 
@@ -792,9 +833,11 @@ class ArbitraryBeamspotTrainer(MlTrainer):
         early_stopper.load_best_model(model)
         return model
 
-    def test(self, model, X_test, test_params):
+    def test(self, model, X_test, test_particle_truth):
         model.eval()
-        test_dataset = MlDataset(X_test, test_params)
+        test_dataset = self._createFixedBeamspotDataset(
+            X_test, test_particle_truth, seed=1
+        )
         test_loader = DataLoader(
             test_dataset, batch_size=self.batch_size, shuffle=False
         )
@@ -807,22 +850,13 @@ class ArbitraryBeamspotTrainer(MlTrainer):
         test_preds_unscaled_list = []
         test_targets_unscaled_list = []
 
-        beamspots = createNewBeamspotsXy(
-            LOWER, UPPER, N_POINTS_IN_XY, DISTRIBUTION_RADIUS
-        )
-        distance_between_beamspots = (UPPER - LOWER) / N_POINTS_IN_XY
-
         with torch.no_grad():
-            for X_test_batch, params_test_batch in test_loader:
-                y_batch = trackParameterAndBeamspotPropagation(
-                    beamspots,
-                    params_test_batch,
-                    noise_scale=distance_between_beamspots / 2,
-                )
+            for X_test_batch, test_beamspots, y_test_batch in test_loader:
                 X_test_gpu = X_test_batch.to(self.device)
-                y_test_gpu = y_batch.to(self.device)
+                beamspots_test_gpu = test_beamspots.to(self.device)
+                y_test_gpu = y_test_batch.to(self.device)
                 test_outputs = self.getModelOutputs(
-                    model, X_test_gpu, self.max_seq_len, self.device
+                    model, X_test_gpu, beamspots_test_gpu
                 )
                 tot_test_loss += (
                     self.criterion(test_outputs, y_test_gpu).item()
