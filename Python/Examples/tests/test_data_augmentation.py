@@ -320,9 +320,9 @@ def test_track_propagation_returns_values(odd_detector_config):
         ]
     )
 
-    x_offset = 0.1
-    y_offset = 1.1
-    z_offset = 10
+    x_offset = 1.0
+    y_offset = 1.0
+    z_offset = 10.0
     beamspots = sampleUniformPointsIn3D(x_offset, y_offset, z_offset, len(truth_params))
 
     augmented_perigees = vacuumTrackParameterAndBeamspotPropagation(

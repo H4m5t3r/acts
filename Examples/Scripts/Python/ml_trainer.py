@@ -26,8 +26,8 @@ N_POINTS_IN_XY = 40
 DISTRIBUTION_RADIUS = 25
 
 # 3D beamspots
-X_OFFSET = 0.1
-Y_OFFSET = 0.1
+X_OFFSET = 1.0
+Y_OFFSET = 1.0
 Z_OFFSET = 10
 NOISE = np.array([X_OFFSET, Y_OFFSET, Z_OFFSET])
 # Standard deviation of each coordinate for points uniform in the cylinder of
