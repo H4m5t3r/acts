@@ -59,11 +59,14 @@ MINI_DATA = bool(args.mini_data)
 
 BASE_DIR = co.BASE_DIR
 RUN_DIR = os.path.join(BASE_DIR, "runs")
+# This script is assumed to be in acts/Examples/Scripts/Python, with the
+# data directories in the ACTS root directory
+ACTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 
 MINI_ML_TRAIN_DATA_DIRS = [
     os.path.join(
-        BASE_DIR,
-        "../acts/mini_data/mini_data_{}/{}/{}/train_1000".format(
+        ACTS_DIR,
+        "mini_data/mini_data_{}/{}/{}/train_1000".format(
             str(num), PARTICLE, SIMULATION
         ),
     )
@@ -71,27 +74,27 @@ MINI_ML_TRAIN_DATA_DIRS = [
 ]
 MEGA_ML_TRAIN_DATA_DIRS = [
     os.path.join(
-        BASE_DIR,
-        "../acts/mega_data/mega_data_{}/{}/{}/train_100000".format(
+        ACTS_DIR,
+        "mega_data/mega_data_{}/{}/{}/train_100000".format(
             str(num), PARTICLE, SIMULATION
         ),
     )
     for num in range(10)
 ]
 MEGA_ML_TEST_DATA_DIR = os.path.join(
-    BASE_DIR, "../acts/mega_data/mega_data_test/{}/{}/test".format(PARTICLE, SIMULATION)
+    ACTS_DIR, "mega_data/mega_data_test/{}/{}/test".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR = os.path.join(
-    BASE_DIR, "../acts/mega_data/mega_data_38/electron/geant4/train_100000"
+    ACTS_DIR, "mega_data/mega_data_38/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR2 = os.path.join(
-    BASE_DIR, "../acts/mega_data/mega_data_49/electron/geant4/train_100000"
+    ACTS_DIR, "mega_data/mega_data_49/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR3 = os.path.join(
-    BASE_DIR, "../acts/mega_data/mega_data_96/electron/geant4/train_100000"
+    ACTS_DIR, "mega_data/mega_data_96/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR4 = os.path.join(
-    BASE_DIR, "../acts/mega_data/mega_data_97/electron/geant4/train_100000"
+    ACTS_DIR, "mega_data/mega_data_97/electron/geant4/train_100000"
 )
 CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
     N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE
@@ -297,13 +300,13 @@ if __name__ == "__main__":
     except:
         print("Mega figures directory already exists")
 
-    # debug_dirs = [os.path.join(BASE_DIR, dir) for dir in ["../acts/debug_data/debug_data_0/electron/geant4/train_100", "../acts/debug_data/debug_data_1/electron/geant4/train_100"]]
-    # debug_dirs = [os.path.join(BASE_DIR, dir) for dir in ["../acts/debug_data/debug_data_2/electron/geant4/train_100", "../acts/debug_data/debug_data_3/electron/geant4/train_100"]]
+    # debug_dirs = [os.path.join(ACTS_DIR, dir) for dir in ["debug_data/debug_data_0/electron/geant4/train_100", "debug_data/debug_data_1/electron/geant4/train_100"]]
+    # debug_dirs = [os.path.join(ACTS_DIR, dir) for dir in ["debug_data/debug_data_2/electron/geant4/train_100", "debug_data/debug_data_3/electron/geant4/train_100"]]
     debug_dirs = [
-        os.path.join(BASE_DIR, dir)
+        os.path.join(ACTS_DIR, dir)
         for dir in [
-            "../acts/debug_data/debug_data_0/electron/geant4/train_200",
-            "../acts/debug_data/debug_data_2/electron/geant4/train_200",
+            "debug_data/debug_data_0/electron/geant4/train_200",
+            "debug_data/debug_data_2/electron/geant4/train_200",
         ]
     ]
     ten_thousant_dir = "/home/taleiko/Documents/CERN/Technical_Student/Program/acts/ml_output/electron/geant4/train"
