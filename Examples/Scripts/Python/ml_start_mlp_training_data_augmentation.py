@@ -66,35 +66,33 @@ RUN_DIR = os.path.join(ACTS_DIR, "runs")
 MINI_ML_TRAIN_DATA_DIRS = [
     os.path.join(
         ACTS_DIR,
-        "mini_data/mini_data_{}/{}/{}/train_1000".format(
-            str(num), PARTICLE, SIMULATION
-        ),
+        "ml_data/mini_data_{}/{}/{}/train_1000".format(str(num), PARTICLE, SIMULATION),
     )
     for num in range(10)
 ]
 MEGA_ML_TRAIN_DATA_DIRS = [
     os.path.join(
         ACTS_DIR,
-        "mega_data/mega_data_{}/{}/{}/train_100000".format(
+        "ml_data/mega_data_{}/{}/{}/train_100000".format(
             str(num), PARTICLE, SIMULATION
         ),
     )
     for num in range(10)
 ]
 MEGA_ML_TEST_DATA_DIR = os.path.join(
-    ACTS_DIR, "mega_data/mega_data_test/{}/{}/test".format(PARTICLE, SIMULATION)
+    ACTS_DIR, "ml_data/mega_data_test/{}/{}/test".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR = os.path.join(
-    ACTS_DIR, "mega_data/mega_data_38/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_38/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR2 = os.path.join(
-    ACTS_DIR, "mega_data/mega_data_49/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_49/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR3 = os.path.join(
-    ACTS_DIR, "mega_data/mega_data_96/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_96/electron/geant4/train_100000"
 )
 EXTRA_DATA_DIR4 = os.path.join(
-    ACTS_DIR, "mega_data/mega_data_97/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_97/electron/geant4/train_100000"
 )
 CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
     N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE
