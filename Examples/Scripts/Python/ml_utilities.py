@@ -18,6 +18,14 @@ import acts
 
 u = acts.UnitConstants
 
+
+def ensureParentDir(file_path):
+    """Create the directory that file_path will be written into, if missing."""
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+
 # Reused across calls to createRandomBeamspotAndTrackParameters(): building the
 # propagator/options once avoids re-creating the stepper/context objects for
 # every call.
@@ -162,8 +170,13 @@ class EarlyStopping:
         """Saves model when validation loss decreases."""
         if self.verbose:
             print("Validation loss decreased, saving model...")
-        self.best_model_state = model.state_dict()
+        # state_dict() tensors share memory with the live parameters, so they
+        # are cloned to keep the best state from following later optimizer steps
+        self.best_model_state = {
+            key: value.detach().clone() for key, value in model.state_dict().items()
+        }
         if self.path is not None:
+            ensureParentDir(self.path)
             torch.save(self.best_model_state, self.path)
             # wandb.save(self.path)
 
@@ -235,6 +248,7 @@ class DataHandler:
         return joblib.load(scaler_path)
 
     def saveScaler(self, scaler, file_path):
+        ensureParentDir(file_path)
         joblib.dump(scaler, file_path)
 
     def readX(self, data_dirs=None):
@@ -738,6 +752,7 @@ class Evaluator:
             axes[i].grid(True)
         fig.suptitle("Truth distributions")
         plt.tight_layout()
+        ensureParentDir(distr_base_path)
         plt.savefig(distr_base_path + "_truth_distr.png")
         plt.show()
 
@@ -768,6 +783,7 @@ class Evaluator:
         axes[0].set_xlim([-0.5, 0.5])
         fig.suptitle("GSF output distributions")
         plt.tight_layout()
+        ensureParentDir(distr_base_path)
         plt.savefig(distr_base_path + "_GSF_distr.png")
         plt.show()
 
@@ -798,6 +814,7 @@ class Evaluator:
             # axes[i].set_xlim(-0.1, 0.1)
         fig.suptitle("Model output distributions")
         plt.tight_layout()
+        ensureParentDir(distr_base_path)
         if is_transformer:
             plt.savefig(distr_base_path + "_transformer_distr.png")
         else:
@@ -917,6 +934,7 @@ class Evaluator:
             fig.suptitle(res_fig_title)
         plt.tight_layout()
         # plt.savefig(res_fig_path, dpi=300)
+        ensureParentDir(res_fig_path)
         plt.savefig(res_fig_path)
         plt.show()
         print("Saved residual figures to", res_fig_path)
@@ -1010,7 +1028,8 @@ class Evaluator:
         cbar.set_label("Pearson correlation")
         ax.set_title(f"Residual correlation matrix for {vis_name}")
         plt.tight_layout()
-        plt.savefig("".join([fig_dir, "/", vis_name, ".png"]))
+        os.makedirs(fig_dir, exist_ok=True)
+        plt.savefig(os.path.join(fig_dir, vis_name + ".png"))
         plt.show()
 
     ##################################################
@@ -1178,6 +1197,7 @@ class Evaluator:
         res_fig_path = os.path.join(
             figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending
         )
+        ensureParentDir(res_fig_path)
         plt.savefig(res_fig_path, dpi=300)
         # plt.show()
         print("Saved model VS. filter z_0 comparison to", res_fig_path)
@@ -1370,6 +1390,7 @@ class Evaluator:
         res_fig_path = os.path.join(
             figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending
         )
+        ensureParentDir(res_fig_path)
         plt.savefig(res_fig_path, dpi=300)
         # plt.show()
         print("Saved model VS. filter z_0 comparison to", res_fig_path)

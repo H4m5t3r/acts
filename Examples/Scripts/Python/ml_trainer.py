@@ -17,6 +17,7 @@ from ml_utilities import (
     EarlyStopping,
     sampleUniformPointsIn3D,
     trackParameterAndBeamspotPropagation,
+    ensureParentDir,
 )
 
 # 2D beamspots
@@ -115,6 +116,7 @@ class MlTrainer:
         self.target_names = ["d0", "z0", "phi", "theta", "q_over_p"]
 
     def save_model(self, model):
+        ensureParentDir(self.model_save_path)
         torch.save(model.state_dict(), self.model_save_path)
 
     def load_model(self, model):

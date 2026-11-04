@@ -50,10 +50,6 @@ MODEL_TYPE = "MLP"
 PARTICLE = "electron"
 SIMULATION = "geant4"
 LEARNING_RATE = args.lr
-# Given by ChatGPT for training
-# EVENT_BATCH_SIZE = 32
-# Given by ChatGPT for inference
-# EVENT_BATCH_SIZE = 512
 # DATA_READING_BATCH_SIZE = args.data_reading_batch_size
 BATCH_SIZE = args.batch_size
 N_EPOCHS = args.n_epochs
@@ -65,12 +61,8 @@ if LOAD_PREV_MODEL and args.seed is None:
     parser.error("--seed is required with --load_model 1 to select the run to load")
 SEED = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
 
-BASE_DIR = co.BASE_DIR
-RUN_DIR = os.path.join(BASE_DIR, "runs")
-# This script is assumed to be in acts/Examples/Scripts/Python, with the
-# data directories in the ACTS root directory
-ACTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-
+ACTS_DIR = co.ACTS_DIR
+RUN_DIR = os.path.join(ACTS_DIR, "runs")
 MINI_ML_TRAIN_DATA_DIRS = [
     os.path.join(
         ACTS_DIR,
