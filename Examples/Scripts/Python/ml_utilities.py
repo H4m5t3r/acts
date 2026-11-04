@@ -223,6 +223,8 @@ class DataHandler:
             else np.asarray(augmentation_semi_axes, dtype=np.float64)
         )
         self.augmentation_max_tracks_per_dir = augmentation_max_tracks_per_dir
+        # Per data directory event selection and track values, see _dirSelection()
+        self._selection_cache = {}
         if load_data_scalers:
             try:
                 print("Trying to load data scalers from previous runs...")
@@ -251,14 +253,41 @@ class DataHandler:
         ensureParentDir(file_path)
         joblib.dump(scaler, file_path)
 
+    # Track fields that must be present and finite for a track to be used: the
+    # true POCA parameters and the filter/GSF fit outputs
+    track_validity_fields = [
+        "t_d0",
+        "t_z0",
+        "t_phi",
+        "t_theta",
+        "t_p",
+        "t_charge",
+        "eLOC0_fit",
+        "eLOC1_fit",
+        "ePHI_fit",
+        "eTHETA_fit",
+        "eQOP_fit",
+    ]
+    measurement_branches = [
+        "event_nr",
+        "volume_id",
+        "layer_id",
+        "surface_id",
+        "rec_loc0",
+        "rec_loc1",
+    ]
+
+    def clearCache(self):
+        """Drops the per-directory event selections and track values cached by
+        _dirSelection() and _trackValues()."""
+        self._selection_cache.clear()
+
     def readX(self, data_dirs=None):
         if data_dirs is None:
             data_dirs = self.train_data_dirs
         print("Reading measurement dfs")
-        # m_dfs = dt.createAllMeasurementDfs(data_dirs, no_outliers=True, poca=True)
-        m_dfs = [self.createMeasurementDfPOCA(dir) for dir in data_dirs]
         X_all = np.concatenate(
-            [self.preprocessX(measurement_df) for measurement_df in m_dfs]
+            [self.preprocessX(self.createMeasurementDfPOCA(dir)) for dir in data_dirs]
         )
         return X_all
 
@@ -266,16 +295,91 @@ class DataHandler:
         tree = ur.open(file_path)[tree_name]
         return tree
 
-    def createInputOutlierMask(self, measurements_tree):
-        event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
+    def _nonOutlierEventIds(self, event_ids):
         unique_ids, counts = np.unique(event_ids, return_counts=True)
-        valid_event_ids = unique_ids[
+        return unique_ids[
             (counts >= self.outlier_floor) & (counts <= self.outlier_roof)
         ]
-        non_outlier_mask = np.isin(event_ids, valid_event_ids)
+
+    def _readTrackValidity(self, tracksummary_tree):
+        """Reads the validity fields in one go. Returns the event ids, a mask of
+        tracks whose fields are all non-empty and finite, the awkward arrays of
+        those fields and the field names present in the tree."""
+        event_ids = tracksummary_tree["event_nr"].array(library="np")
+        tree_keys = set(tracksummary_tree.keys())
+        # Some trees might not contain all fields; missing fields are skipped
+        fields = [f for f in self.track_validity_fields if f in tree_keys]
+        arrays = tracksummary_tree.arrays(fields)
+        valid = np.ones(len(event_ids), dtype=bool)
+        for field in fields:
+            arr = arrays[field]
+            nonempty = ak.to_numpy(ak.num(arr) > 0)
+            finite = np.zeros(len(event_ids), dtype=bool)
+            finite[nonempty] = np.isfinite(ak.to_numpy(arr[nonempty][:, 0]))
+            valid &= finite
+        return event_ids, valid, arrays, fields
+
+    def _dirSelection(self, data_dir):
+        """Computes (once per directory) which events pass the sequence length
+        and track validity cuts, and caches the selected tracks' values of the
+        fields already read for the validity check."""
+        key = os.path.abspath(data_dir)
+        selection = self._selection_cache.get(key)
+        if selection is not None:
+            return selection
+
+        measurements_tree = self.readRootTree(
+            os.path.join(data_dir, "root/measurements.root"), "measurements"
+        )
+        meas_event_ids = measurements_tree["event_nr"].array(library="np")
+        non_outlier_ids = self._nonOutlierEventIds(meas_event_ids)
+        n_outlier_filtered = int(np.sum(~np.isin(meas_event_ids, non_outlier_ids)))
+        print("Number of sequence length outliers in data fits:", n_outlier_filtered)
+
+        # tracksummary_path = os.path.join(data_dir, "tracksummary.root")
+        tracksummary_path = os.path.join(data_dir, "tracksummary_gsf.root")
+        tracksummary_tree = self.readRootTree(tracksummary_path, "tracksummary")
+        track_event_ids, valid, arrays, fields = self._readTrackValidity(
+            tracksummary_tree
+        )
+        successful_ids = track_event_ids[valid]
+        track_mask = np.isin(track_event_ids, non_outlier_ids) & np.isin(
+            track_event_ids, successful_ids
+        )
+        track_values = {"event_nr": track_event_ids[track_mask]}
+        for field in fields:
+            track_values[field] = ak.to_numpy(arrays[field][track_mask][:, 0])
+
+        selection = {
+            "non_outlier_ids": non_outlier_ids,
+            "successful_ids": successful_ids,
+            "tracksummary_path": tracksummary_path,
+            "track_mask": track_mask,
+            "track_values": track_values,
+        }
+        self._selection_cache[key] = selection
+        return selection
+
+    def _trackValues(self, data_dir, branches):
+        """Returns the selected tracks' values of the given tracksummary branches
+        (first element of each entry), reading only branches not cached yet."""
+        selection = self._dirSelection(data_dir)
+        values = selection["track_values"]
+        missing = [b for b in branches if b not in values]
+        if missing:
+            tree = self.readRootTree(selection["tracksummary_path"], "tracksummary")
+            arrays = tree.arrays(missing)
+            for branch in missing:
+                values[branch] = ak.to_numpy(
+                    arrays[branch][selection["track_mask"]][:, 0]
+                )
+        return [values[b] for b in branches]
+
+    def createInputOutlierMask(self, measurements_tree):
+        event_ids = measurements_tree["event_nr"].array(library="np")
+        non_outlier_mask = np.isin(event_ids, self._nonOutlierEventIds(event_ids))
         n_outlier_filtered = event_ids.shape[0] - np.sum(non_outlier_mask)
         print("Number of sequence length outliers in data fits:", n_outlier_filtered)
-        # print("Number of removed measurement rows:", event_ids.shape[0] - np.sum(non_outlier_mask), "out of", event_ids.shape[0])
         return non_outlier_mask
 
     def createSuccessfulParticlePOCAIds(self, data_dir=None, tracksummary_tree=None):
@@ -284,214 +388,83 @@ class DataHandler:
                 "DataHandler.createSuccessfulD0Z0Ids: data_dir or tracksummary_tree must be provided"
             )
         if tracksummary_tree is None:
-            file_path = os.path.join(data_dir, "tracksummary.root")
-            # file_path = os.path.join(data_dir, "tracksummary_gsf.root")
-            tracksummary_tree = self.readRootTree(file_path, "tracksummary")
-
-        # Event ids
-        event_ids = ak.to_numpy(tracksummary_tree["event_nr"].array()).squeeze()
-
-        # Default set of truth fields to require as finite values. Include
-        # fields used downstream (t_d0, t_z0, t_phi, t_theta, t_p, t_charge).
-        # Require both true POCA parameters and the filter/GSF fit outputs to be finite
-        fields_to_check = [
-            "t_d0",
-            "t_z0",
-            "t_phi",
-            "t_theta",
-            "t_p",
-            "t_charge",
-            "eLOC0_fit",
-            "eLOC1_fit",
-            "ePHI_fit",
-            "eTHETA_fit",
-            "eQOP_fit",
-        ]
-        masks = []
-        for field in fields_to_check:
-            # Some trees might not contain all fields; if missing, skip the field
-            if field not in tracksummary_tree.keys():
-                continue
-            arr_ak = tracksummary_tree[field].array()
-            # nonempty: entries with at least one element (handles awkward missing/empty lists)
-            nonempty = np.asarray(ak.to_numpy(ak.num(arr_ak) > 0)).squeeze()
-            # Extract a single scalar per entry (first element) to get a regular 1D array
-            # This avoids converting jagged subarrays directly to a RegularArray
-            firsts = ak.firsts(arr_ak)
-            arr = ak.to_numpy(firsts)
-            arr = np.asarray(arr).squeeze()
-            # finite: numeric finite values (will be False for NaN/Inf)
-            finite = np.isfinite(arr)
-            # combine both criteria: present and numeric
-            combined = np.logical_and(nonempty, finite)
-            masks.append(combined)
-
-        # Copilot's fallback code
-        # if len(masks) == 0:
-        #     # Fallback: if no numeric fields found use presence of eLOC0_fit as before
-        #     if "eLOC0_fit" in tracksummary_tree.keys():
-        #         eLOC0 = tracksummary_tree["eLOC0_fit"].array()
-        #         empty_filter = np.array([bool(x) for x in ak.num(eLOC0)])
-        #         successful_ids = ak.to_numpy(tracksummary_tree["event_nr"].array()[empty_filter]).squeeze()
-        #         return successful_ids
-        #     else:
-        #         return event_ids
-
-        combined_mask = np.logical_and.reduce(masks)
-        # print("UNSUCCESSFUL POCA RUNS:")
-        # print(len(event_ids))
-        # print(combined_mask.sum())
-        # print(len(event_ids) - combined_mask.sum())
-        # sys.exit(0)
-        successful_ids = event_ids[combined_mask]
-        return successful_ids
+            return self._dirSelection(data_dir)["successful_ids"]
+        event_ids, valid, _, _ = self._readTrackValidity(tracksummary_tree)
+        return event_ids[valid]
 
     def createNonNanMeasMask(self, measurements_tree, data_dir):
         successful_d0_z0_ids = self.createSuccessfulParticlePOCAIds(data_dir)
-        # print(successful_d0_z0_ids)
-        id_set = set(successful_d0_z0_ids)
-        # print(id_set)
-        meas_event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
-        non_nan_mask = np.array([x in id_set for x in meas_event_ids])
-        # print(list(set(meas_event_ids[non_nan_mask])))
-        return non_nan_mask
+        meas_event_ids = measurements_tree["event_nr"].array(library="np")
+        return np.isin(meas_event_ids, successful_d0_z0_ids)
 
     def createMeasurementDfPOCA(self, data_dir):
         print("Creating measurement df")
-        file_path = os.path.join(data_dir, "measurements.root")
+        selection = self._dirSelection(data_dir)
+        file_path = os.path.join(data_dir, "root/measurements.root")
         measurements_tree = self.readRootTree(file_path, "measurements")
-        non_outlier_mask = self.createInputOutlierMask(measurements_tree)
-        non_nan_mask = self.createNonNanMeasMask(measurements_tree, data_dir)
-        mask = np.array(
-            [
-                non_outlier and non_nan
-                for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)
-            ]
+        meas = measurements_tree.arrays(self.measurement_branches, library="np")
+        event_ids = meas["event_nr"]
+        mask = np.isin(event_ids, selection["non_outlier_ids"]) & np.isin(
+            event_ids, selection["successful_ids"]
         )
-        global_coords = sg.localToGlobalCoordinateConversion(measurements_tree)
+        meas = {branch: values[mask] for branch, values in meas.items()}
+        global_coords = sg.localToGlobalFromArrays(
+            meas["volume_id"],
+            meas["layer_id"],
+            meas["surface_id"],
+            meas["rec_loc0"],
+            meas["rec_loc1"],
+        )
         measurements_df = pd.DataFrame(
             {
                 # NOTE: Changing the event nr column name for consistency
-                "event_id": ak.to_numpy(
-                    measurements_tree["event_nr"].array()[mask]
-                ).squeeze(),
-                "volume_id": ak.to_numpy(
-                    measurements_tree["volume_id"].array()[mask]
-                ).squeeze(),
-                "rec_loc0": ak.to_numpy(
-                    measurements_tree["rec_loc0"].array()[mask]
-                ).squeeze(),
-                "rec_loc1": ak.to_numpy(
-                    measurements_tree["rec_loc1"].array()[mask]
-                ).squeeze(),
-                "global_x": global_coords[:, 0][mask],
-                "global_y": global_coords[:, 1][mask],
-                "global_z": global_coords[:, 2][mask],
+                "event_id": meas["event_nr"],
+                "volume_id": meas["volume_id"],
+                "rec_loc0": meas["rec_loc0"],
+                "rec_loc1": meas["rec_loc1"],
+                "global_x": global_coords[:, 0],
+                "global_y": global_coords[:, 1],
+                "global_z": global_coords[:, 2],
             }
         )
         return measurements_df
 
     def findNonOutlierEventIds(self, data_dir):
-        file_path = os.path.join(data_dir, "measurements.root")
-        measurements_tree = self.readRootTree(file_path, "measurements")
-        event_ids = ak.to_numpy(measurements_tree["event_nr"].array()).squeeze()
-        unique_ids, counts = np.unique(event_ids, return_counts=True)
-        valid_event_ids = unique_ids[
-            (counts >= self.outlier_floor) & (counts <= self.outlier_roof)
-        ]
-        return valid_event_ids
+        return self._dirSelection(data_dir)["non_outlier_ids"]
 
     def prepareTrackSummaryDf(self, data_dir):
-        file_path = os.path.join(data_dir, "tracksummary.root")
-        tracksummary_tree = self.readRootTree(file_path, "tracksummary")
-
-        event_id_array = ak.to_numpy(tracksummary_tree["event_nr"].array()).squeeze()
-        non_outlier_event_ids = set(self.findNonOutlierEventIds(data_dir))
-        non_outlier_mask = np.array(
-            [x in non_outlier_event_ids for x in event_id_array]
+        selection = self._dirSelection(data_dir)
+        tracksummary_tree = self.readRootTree(
+            selection["tracksummary_path"], "tracksummary"
         )
-
-        successful_train_d0_z0_ids = self.createSuccessfulParticlePOCAIds(data_dir)
-        id_set = set(successful_train_d0_z0_ids)
-        non_nan_mask = np.array([x in id_set for x in event_id_array])
-
-        combined_filter = np.array(
-            [
-                non_outlier and non_nan
-                for non_outlier, non_nan in zip(non_outlier_mask, non_nan_mask)
-            ]
-        )
-
-        # print("SEQUENCE OUTLIERS:")
-        # print(len(non_outlier_mask))
-        # print(len(non_outlier_mask) - non_outlier_mask.sum())
-        # print("FAILED GSF RUNS:")
-        # print(len(non_nan_mask))
-        # print(len(non_nan_mask) - non_nan_mask.sum())
-        # print("COMBINED FILTER:")
-        # print(len(combined_filter))
-        # print(len(combined_filter) - combined_filter.sum())
-        # sys.exit(0)
-
-        return (tracksummary_tree, combined_filter)
+        return (tracksummary_tree, selection["track_mask"])
 
     def createPOCAParameterDf(self, data_dir):
-        tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        t_q = ak.to_numpy(
-            tracksummary_tree["t_charge"].array()[combined_filter]
-        ).squeeze()
-        t_p = ak.to_numpy(tracksummary_tree["t_p"].array()[combined_filter]).squeeze()
+        event_id, d0, z0, phi, theta, t_q, t_p = self._trackValues(
+            data_dir,
+            ["event_nr", "t_d0", "t_z0", "t_phi", "t_theta", "t_charge", "t_p"],
+        )
         tracksummary_df = pd.DataFrame(
             {
-                "event_id": ak.to_numpy(
-                    tracksummary_tree["event_nr"].array()[combined_filter]
-                ).squeeze(),
-                "d0": ak.to_numpy(
-                    tracksummary_tree["t_d0"].array()[combined_filter]
-                ).squeeze(),
-                "z0": ak.to_numpy(
-                    tracksummary_tree["t_z0"].array()[combined_filter]
-                ).squeeze(),
-                "phi": ak.to_numpy(
-                    tracksummary_tree["t_phi"].array()[combined_filter]
-                ).squeeze(),
-                "theta": ak.to_numpy(
-                    tracksummary_tree["t_theta"].array()[combined_filter]
-                ).squeeze(),
+                "event_id": event_id,
+                "d0": d0,
+                "z0": z0,
+                "phi": phi,
+                "theta": theta,
                 "q_over_p": t_q / t_p,
             }
         )
-        # For debugging: comparison with measurement_df
-        # orig_ids = set(ak.to_numpy(tracksummary_tree["event_nr"].array()).squeeze())
-        # incl_ids = set(tracksummary_df["event_id"])
-        # filtered_out_ids = orig_ids - incl_ids
-        # print("Filtered out PARTICLE IDs:\n", list(filtered_out_ids))
-        # Copilot before empty and NaN fix in createSuccessfulParticlePOCAIds()
-        # Ensure numeric dtype and drop any rows with NaN / Inf in the POCA columns.
-        # tracksummary_df[self.poca_columns] = tracksummary_df[self.poca_columns].apply(pd.to_numeric, errors='coerce')
-        # tracksummary_df = tracksummary_df.replace([np.inf, -np.inf], np.nan)
-        # n_before = len(tracksummary_df)
-        # tracksummary_df = tracksummary_df.dropna(subset=self.poca_columns)
-        # n_after = len(tracksummary_df)
-
         return tracksummary_df
 
     def createParticleTruthDf(self, data_dir):
         """Reads each particle's true vertex, momentum and charge with the same
         filtering as createPOCAParameterDf(), so the rows line up with readX()."""
-        tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
         branches = ["t_vx", "t_vy", "t_vz", "t_px", "t_py", "t_pz", "t_charge"]
+        values = self._trackValues(data_dir, ["event_nr"] + branches)
         particle_truth_df = pd.DataFrame(
             {
-                "event_id": ak.to_numpy(
-                    tracksummary_tree["event_nr"].array()[combined_filter]
-                ).squeeze(),
-                **{
-                    column: ak.to_numpy(
-                        tracksummary_tree[branch].array()[combined_filter]
-                    ).squeeze()
-                    for column, branch in zip(self.particle_truth_columns, branches)
-                },
+                "event_id": values[0],
+                **dict(zip(self.particle_truth_columns, values[1:])),
             }
         )
         return particle_truth_df
@@ -508,100 +481,82 @@ class DataHandler:
         )
 
     def createFilterTrackSummaryDf(self, data_dir):
-        tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        tracksummary_df = pd.DataFrame(
-            {
-                "event_id": ak.to_numpy(tracksummary_tree["event_nr"].array())[
-                    combined_filter
-                ],
-                "est_d0": ak.to_numpy(
-                    tracksummary_tree["eLOC0_fit"].array()[combined_filter]
-                ).squeeze(),
-                "est_z0": ak.to_numpy(
-                    tracksummary_tree["eLOC1_fit"].array()[combined_filter]
-                ).squeeze(),
-                "est_phi": ak.to_numpy(
-                    tracksummary_tree["ePHI_fit"].array()[combined_filter]
-                ).squeeze(),
-                "est_theta": ak.to_numpy(
-                    tracksummary_tree["eTHETA_fit"].array()[combined_filter]
-                ).squeeze(),
-                "est_q_over_p": ak.to_numpy(
-                    tracksummary_tree["eQOP_fit"].array()[combined_filter]
-                ).squeeze(),
-            }
-        )
-        return tracksummary_df
+        columns = [
+            "event_id",
+            "est_d0",
+            "est_z0",
+            "est_phi",
+            "est_theta",
+            "est_q_over_p",
+        ]
+        branches = [
+            "event_nr",
+            "eLOC0_fit",
+            "eLOC1_fit",
+            "ePHI_fit",
+            "eTHETA_fit",
+            "eQOP_fit",
+        ]
+        values = self._trackValues(data_dir, branches)
+        return pd.DataFrame(dict(zip(columns, values)))
 
     def createFilterResidualDf(self, data_dir):
-        tracksummary_tree, combined_filter = self.prepareTrackSummaryDf(data_dir)
-        tracksummary_df = pd.DataFrame(
-            {
-                "event_id": ak.to_numpy(tracksummary_tree["event_nr"].array())[
-                    combined_filter
-                ],
-                "res_gsf_d0": ak.to_numpy(
-                    tracksummary_tree["res_eLOC0_fit"].array()[combined_filter]
-                ).squeeze(),
-                "res_gsf_z0": ak.to_numpy(
-                    tracksummary_tree["res_eLOC1_fit"].array()[combined_filter]
-                ).squeeze(),
-                "res_gsf_phi": ak.to_numpy(
-                    tracksummary_tree["res_ePHI_fit"].array()[combined_filter]
-                ).squeeze(),
-                "res_gsf_theta": ak.to_numpy(
-                    tracksummary_tree["res_eTHETA_fit"].array()[combined_filter]
-                ).squeeze(),
-                "res_gsf_q_over_p": ak.to_numpy(
-                    tracksummary_tree["res_eQOP_fit"].array()[combined_filter]
-                ).squeeze(),
-            }
-        )
-        return tracksummary_df
+        columns = [
+            "event_id",
+            "res_gsf_d0",
+            "res_gsf_z0",
+            "res_gsf_phi",
+            "res_gsf_theta",
+            "res_gsf_q_over_p",
+        ]
+        branches = [
+            "event_nr",
+            "res_eLOC0_fit",
+            "res_eLOC1_fit",
+            "res_ePHI_fit",
+            "res_eTHETA_fit",
+            "res_eQOP_fit",
+        ]
+        values = self._trackValues(data_dir, branches)
+        return pd.DataFrame(dict(zip(columns, values)))
 
     def readY(self, data_dirs=None):
         if data_dirs is None:
             data_dirs = self.train_data_dirs
         print("Reading parameter dfs")
-        # p_dfs = dt.createAllParticleDfs(data_dirs, no_outliers=True, poca=True, parameters=True)
         p_dfs = [self.createPOCAParameterDf(dir) for dir in data_dirs]
         y_all = np.concatenate([self.preprocessY(particle_df) for particle_df in p_dfs])
         return y_all
 
     def preprocessX(self, measurement_df):
+        """Scales the global coordinates and builds one row per event (sorted by
+        event id) of max outlier_roof hits in inward order, zero padded at the
+        end and flattened to (x0, y0, z0, x1, ...)."""
         print("Preprocessing started")
-        measurement_df = measurement_df[
-            ["event_id", "global_x", "global_y", "global_z"]
-        ]
         input_columns_to_normalize = ["global_x", "global_y", "global_z"]
-        # measurement_df.loc[:, input_columns_to_normalize] = self.input_scaler.transform(
-        #     measurement_df[input_columns_to_normalize]
-        # )
-        coords = measurement_df[input_columns_to_normalize]
-        coords_scaled = self.input_scaler.transform(coords)
-        meas_df_scaled = measurement_df.copy()
-        meas_df_scaled[input_columns_to_normalize] = coords_scaled
-        grouped = meas_df_scaled.groupby("event_id")
-        X = np.stack(
-            [
-                self.processXInward(group, self.outlier_roof)
-                for event_id, group in grouped
-            ]
+        event_ids = measurement_df["event_id"].to_numpy()
+        coords = self.input_scaler.transform(
+            measurement_df[input_columns_to_normalize].to_numpy()
         )
-        return X
-
-    def processXInward(self, group, max_seq_len):
-        coords = group[["global_x", "global_y", "global_z"]].values
-        # Change the order of the coordinate to go inward instead of outward
-        coords = np.flip(coords, axis=0)
-        pad_len = max_seq_len - len(coords)
-        # Add zeroes after the data
-        coords = np.pad(coords, ((0, pad_len), (0, 0)), mode="constant")
-        coords = coords.flatten()
-        return coords
+        # Stable sort keeps the hit order within each event
+        order = np.argsort(event_ids, kind="stable")
+        event_ids = event_ids[order]
+        coords = coords[order]
+        _, start, counts = np.unique(event_ids, return_index=True, return_counts=True)
+        if np.any(counts > self.outlier_roof):
+            raise ValueError(
+                f"events with more than {self.outlier_roof} measurements in preprocessX()"
+            )
+        group = np.repeat(np.arange(len(counts)), counts)
+        position_in_group = np.arange(len(event_ids)) - start[group]
+        # NOTE: Reverse the order within each event to go inward instead of outward (design choice)
+        inward_position = counts[group] - 1 - position_in_group
+        X = np.zeros((len(counts), self.outlier_roof, 3), dtype=coords.dtype)
+        X[group, inward_position] = coords
+        return X.reshape(len(counts), -1)
 
     def preprocessY(self, particle_df):
-        y = particle_df[self.poca_columns]
+        y = particle_df[self.poca_columns].to_numpy()
         y = self.output_scaler.transform(y)
         return y
 

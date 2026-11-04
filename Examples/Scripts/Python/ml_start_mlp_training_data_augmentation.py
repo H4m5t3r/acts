@@ -43,6 +43,10 @@ parser.add_argument("--mini_data", type=int, default=0)
 # A random seed is drawn if not given. Required with --load_model 1 to select
 # which run to load.
 parser.add_argument("--seed", type=int, default=None)
+# DataLoader worker processes propagating the augmented training targets. Each
+# costs roughly 0.4-0.8 GB of RAM. Default: the CPUs allocated to the job minus
+# one, at most ml_trainer.MAX_DEFAULT_NUM_WORKERS.
+parser.add_argument("--num_workers", type=int, default=None)
 args = parser.parse_args()
 
 MODEL_TYPE = "MLP"
@@ -215,6 +219,7 @@ def trainMlpModel(
         max_seq_len=max_seq_len,
         input_scaler=dh.getInputScaler(),
         output_scaler=dh.getOutputScaler(),
+        num_workers=args.num_workers,
     )
     if LOAD_PREV_MODEL:
         print("LOADING SAVED MODEL WITH THE SAME CONFIGURATION AND SKIPPING TRAINING")

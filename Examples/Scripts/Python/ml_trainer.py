@@ -667,6 +667,30 @@ class BeamspotPropagationCollate:
         )
 
 
+# Upper limit for the default number of DataLoader workers. Every 'spawn'
+# worker re-imports torch, ACTS etc. and costs roughly 0.4-0.8 GB of RAM (~0.4 GB
+# private + the shared dataset/libraries), while propagating ~17 batches of 1024
+# tracks per second. Pass num_workers explicitly to go beyond this.
+MAX_DEFAULT_NUM_WORKERS = 8
+
+
+def allocatedCpuCount():
+    """Number of CPUs this job may actually use. os.cpu_count() reports every
+    core of the machine, which on shared nodes and batch slots can be far more
+    than the job was given. Batch systems export the allocation in environment
+    variables (HTCondor sets OMP_NUM_THREADS to request_cpus, Slurm sets
+    SLURM_CPUS_PER_TASK); the CPU affinity mask covers pinned jobs."""
+    try:
+        counts = [len(os.sched_getaffinity(0))]
+    except AttributeError:
+        counts = [os.cpu_count() or 1]
+    for var in ("OMP_NUM_THREADS", "SLURM_CPUS_PER_TASK"):
+        value = os.environ.get(var, "")
+        if value.isdigit() and int(value) > 0:
+            counts.append(int(value))
+    return min(counts)
+
+
 def seedBeamspotWorker(worker_id):
     """Gives every DataLoader worker its own seed for the numpy generator used
     by sampleUniformPointsIn3D(). torch derives a distinct per-worker seed from
@@ -677,12 +701,14 @@ def seedBeamspotWorker(worker_id):
 class ArbitraryBeamspotTrainer(MlTrainer):
     def __init__(self, *args, num_workers=None, **kwargs):
         """num_workers: DataLoader worker processes doing the beamspot sampling
-        and propagation for the training batches. None uses all CPU cores but
-        one, which is left for the main training process. 0 propagates in the
-        main process."""
+        and propagation for the training batches. None uses the CPUs allocated
+        to the job (see allocatedCpuCount()) but one, which is left for the main
+        training process, capped at MAX_DEFAULT_NUM_WORKERS since every worker
+        holds its own copy of the imported libraries. 0 propagates in the main
+        process."""
         super().__init__(*args, **kwargs)
         if num_workers is None:
-            num_workers = max((os.cpu_count() or 1) - 1, 0)
+            num_workers = min(max(allocatedCpuCount() - 1, 0), MAX_DEFAULT_NUM_WORKERS)
         self.num_workers = num_workers
 
     def _propagateTargets(self, beamspots, particle_truth):
