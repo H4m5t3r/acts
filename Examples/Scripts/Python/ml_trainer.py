@@ -691,6 +691,17 @@ def allocatedCpuCount():
     return min(counts)
 
 
+def describeNonFinite(**tensors):
+    """Lists how many rows of each given tensor contain NaN/inf, to tell
+    whether a non-finite loss comes from the inputs, the targets or the model."""
+    parts = []
+    for name, tensor in tensors.items():
+        tensor = tensor.detach()
+        rows = (~torch.isfinite(tensor)).reshape(tensor.shape[0], -1).any(dim=1)
+        parts.append(f"{name}: {int(rows.sum())}/{tensor.shape[0]} non-finite rows")
+    return "Batch contents: " + ", ".join(parts)
+
+
 def seedBeamspotWorker(worker_id):
     """Gives every DataLoader worker its own seed for the numpy generator used
     by sampleUniformPointsIn3D(). torch derives a distinct per-worker seed from
@@ -784,6 +795,19 @@ class ArbitraryBeamspotTrainer(MlTrainer):
                 optimizer.zero_grad()
                 outputs = self.getModelOutputs(model, X_train_gpu, beamspots_gpu)
                 loss = self.criterion(outputs, y_train_gpu)
+                loss_value = loss.item()
+                # A single non-finite loss turns all weights into NaN on the
+                # optimizer step, so stop here before the model is ruined
+                if not np.isfinite(loss_value):
+                    raise RuntimeError(
+                        f"Non-finite training loss ({loss_value}) in epoch {epoch + 1}. "
+                        + describeNonFinite(
+                            X=X_batch,
+                            beamspots=beamspots_batch,
+                            targets=y_batch,
+                            outputs=outputs,
+                        )
+                    )
                 # collect unscaled predictions and targets for variance ratio
                 pred_unscaled_batch, y_unscaled_batch = self._unscale_tensors(
                     outputs, y_train_gpu
@@ -805,7 +829,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
                 optimizer.step()
                 # Loss multiplied with the batch size in case the sizes of the batches are not the same
                 # so it can be divided by the length of the dataset (n samples) later
-                tot_train_loss += loss.item() * X_batch.shape[0]
+                tot_train_loss += loss_value * X_batch.shape[0]
                 aver_unscaled_loss = self.getUnscaledLoss(
                     self.criterion, outputs, y_train_gpu
                 )

@@ -274,7 +274,17 @@ def trainMlpModel(
     # trainer.test(model, X_test2, y_test2)
     # sys.exit(0)
 
-    ev = Evaluator(max_seq_len, trainer.input_scaler, trainer.output_scaler, dh)
+    # The model also takes the beamspot as input. The evaluation plots compare
+    # against the truth and GSF parameters in the tracksummary, which are w.r.t.
+    # the origin, so the model is evaluated with the beamspot at (0, 0, 0).
+    ev = Evaluator(
+        max_seq_len,
+        trainer.input_scaler,
+        trainer.output_scaler,
+        dh,
+        getAugmentedOutputs=getAugmentedMlpOutputs,
+        beamspot=(0.0, 0.0, 0.0),
+    )
 
     ev.plotDistributions(
         test_data_dir, model, is_transformer=False, distr_base_path=DISTR_FIG_BASE_PATH

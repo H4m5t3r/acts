@@ -152,6 +152,15 @@ class EarlyStopping:
     def __call__(self, val_loss, model):
         score = -val_loss
 
+        # NaN compares False with everything, which would count as an
+        # improvement below and overwrite the best checkpoint with a broken model
+        if not np.isfinite(score):
+            print(f"EarlyStopping: non-finite validation loss ({val_loss}), not saving")
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+            return
+
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(model)
@@ -182,6 +191,10 @@ class EarlyStopping:
 
     def load_best_model(self, model):
         """Load the best model state into the given model."""
+        if self.best_model_state is None:
+            raise RuntimeError(
+                "EarlyStopping: no epoch had a finite validation loss, so there is no model to load"
+            )
         model.load_state_dict(self.best_model_state)
 
 
@@ -277,6 +290,11 @@ class DataHandler:
         "rec_loc1",
     ]
 
+    # Largest fraction of events per directory with unconvertible hits that is
+    # removed with a warning; above it an error is raised, see
+    # _unconvertibleHitEventIds()
+    max_unconvertible_event_fraction = 0.01
+
     def clearCache(self):
         """Drops the per-directory event selections and track values cached by
         _dirSelection() and _trackValues()."""
@@ -331,10 +349,13 @@ class DataHandler:
         measurements_tree = self.readRootTree(
             os.path.join(data_dir, "root/measurements.root"), "measurements"
         )
-        meas_event_ids = measurements_tree["event_nr"].array(library="np")
+        meas = measurements_tree.arrays(self.measurement_branches, library="np")
+        meas_event_ids = meas["event_nr"]
         non_outlier_ids = self._nonOutlierEventIds(meas_event_ids)
         n_outlier_filtered = int(np.sum(~np.isin(meas_event_ids, non_outlier_ids)))
         print("Number of sequence length outliers in data fits:", n_outlier_filtered)
+        bad_hit_ids = self._unconvertibleHitEventIds(meas, data_dir)
+        del meas
 
         # tracksummary_path = os.path.join(data_dir, "tracksummary.root")
         tracksummary_path = os.path.join(data_dir, "tracksummary_gsf.root")
@@ -343,8 +364,10 @@ class DataHandler:
             tracksummary_tree
         )
         successful_ids = track_event_ids[valid]
-        track_mask = np.isin(track_event_ids, non_outlier_ids) & np.isin(
-            track_event_ids, successful_ids
+        track_mask = (
+            np.isin(track_event_ids, non_outlier_ids)
+            & np.isin(track_event_ids, successful_ids)
+            & ~np.isin(track_event_ids, bad_hit_ids)
         )
         track_values = {"event_nr": track_event_ids[track_mask]}
         for field in fields:
@@ -353,12 +376,69 @@ class DataHandler:
         selection = {
             "non_outlier_ids": non_outlier_ids,
             "successful_ids": successful_ids,
+            "bad_hit_ids": bad_hit_ids,
             "tracksummary_path": tracksummary_path,
             "track_mask": track_mask,
             "track_values": track_values,
         }
         self._selection_cache[key] = selection
         return selection
+
+    def _unconvertibleHitEventIds(self, meas, data_dir):
+        """Event ids with at least one hit whose global position can't be
+        computed (surface missing from the geometry JSON or non-finite local
+        coordinates). A single NaN input row makes the training loss NaN, so
+        these events are left out of both X and y. If more than
+        max_unconvertible_event_fraction of the events are affected, the data
+        and the reading don't fit together (e.g. 1D strip measurements or a
+        geometry JSON from another geometry) and an error is raised instead."""
+        global_coords = sg.localToGlobalFromArrays(
+            meas["volume_id"],
+            meas["layer_id"],
+            meas["surface_id"],
+            meas["rec_loc0"],
+            meas["rec_loc1"],
+        )
+        bad_hits = ~np.isfinite(global_coords).all(axis=1)
+        bad_hit_ids = np.unique(meas["event_nr"][bad_hits])
+        if len(bad_hit_ids) == 0:
+            return bad_hit_ids
+        n_events = len(np.unique(meas["event_nr"]))
+        fraction = len(bad_hit_ids) / n_events
+        # Separate the two causes, they need different fixes
+        nonfinite_loc = ~(np.isfinite(meas["rec_loc0"]) & np.isfinite(meas["rec_loc1"]))
+        n_nonfinite_loc = int((bad_hits & nonfinite_loc).sum())
+        n_missing_surface = int((bad_hits & ~nonfinite_loc).sum())
+        causes = []
+        hints = []
+        if n_nonfinite_loc:
+            volumes = np.unique(meas["volume_id"][bad_hits & nonfinite_loc])
+            causes.append(
+                f"{n_nonfinite_loc} hits with NaN/inf rec_loc0/rec_loc1 in volumes "
+                f"{volumes.tolist()}"
+            )
+            hints.append(
+                "NaN local coordinates usually mean 1D measurements: the "
+                "digitization config doesn't smear loc1 for these volumes"
+            )
+        if n_missing_surface:
+            causes.append(
+                f"{n_missing_surface} hits on surfaces missing from the geometry "
+                f"JSON in {sg.JSON_DATA_DIR}"
+            )
+            hints.append(
+                "check that the geometry JSON was written for the same detector "
+                "geometry and ACTS version as the data"
+            )
+        message = (
+            f"{data_dir}: {len(bad_hit_ids)} of {n_events} events ({fraction:.2%}) "
+            f"have hits without a finite global position: " + "; ".join(causes)
+        )
+        if fraction > self.max_unconvertible_event_fraction:
+            hint = "; ".join(hints)
+            raise ValueError(f"{message}. {hint[0].upper()}{hint[1:]}.")
+        print(f"WARNING: {message}. These events are removed.")
+        return bad_hit_ids
 
     def _trackValues(self, data_dir, branches):
         """Returns the selected tracks' values of the given tracksummary branches
@@ -404,8 +484,10 @@ class DataHandler:
         measurements_tree = self.readRootTree(file_path, "measurements")
         meas = measurements_tree.arrays(self.measurement_branches, library="np")
         event_ids = meas["event_nr"]
-        mask = np.isin(event_ids, selection["non_outlier_ids"]) & np.isin(
-            event_ids, selection["successful_ids"]
+        mask = (
+            np.isin(event_ids, selection["non_outlier_ids"])
+            & np.isin(event_ids, selection["successful_ids"])
+            & ~np.isin(event_ids, selection["bad_hit_ids"])
         )
         meas = {branch: values[mask] for branch, values in meas.items()}
         global_coords = sg.localToGlobalFromArrays(
@@ -660,11 +742,23 @@ class Evaluator:
         input_scaler: StandardScaler,
         output_scaler: StandardScaler,
         data_handler: DataHandler,
+        getAugmentedOutputs=None,
+        beamspot=(0.0, 0.0, 0.0),
     ):
+        """getAugmentedOutputs: for MLPs trained with beamspot augmentation, the
+        function feeding the model its inputs together with the beamspot,
+        called as getAugmentedOutputs(model, X_gpu, beamspots_gpu) (e.g.
+        ml_trainer.getAugmentedMlpOutputs). None for models taking only the
+        hit coordinates.
+        beamspot: (x, y, z) in mm given to such models for every track. The
+        truth and GSF parameters in the tracksummary are w.r.t. the origin, so
+        the default (0, 0, 0) is the one the evaluation plots compare against."""
         self.max_seq_len = max_seq_len
         self.input_scaler = input_scaler
         self.output_scaler = output_scaler
         self.data_handler = data_handler
+        self.getAugmentedOutputs = getAugmentedOutputs
+        self.beamspot = np.asarray(beamspot, dtype=np.float32)
         self.poca_columns = ["d0", "z0", "phi", "theta", "q_over_p"]
         self.gsf_columns = ["est_d0", "est_z0", "est_phi", "est_theta", "est_q_over_p"]
         self.titles = ["d₀", "z₀", "φ", "θ", "q/p"]
@@ -916,8 +1010,12 @@ class Evaluator:
 
     def makeMlpResidualPredictions(self, mlp_model, X_batch, device):
         X_batch = X_batch.to(device)
-        preds = mlp_model(X_batch)
-        return preds
+        if self.getAugmentedOutputs is None:
+            return mlp_model(X_batch)
+        beamspots = torch.as_tensor(
+            self.beamspot, dtype=X_batch.dtype, device=device
+        ).expand(X_batch.shape[0], 3)
+        return self.getAugmentedOutputs(mlp_model, X_batch, beamspots)
 
     ##################################################
     # Correlation
