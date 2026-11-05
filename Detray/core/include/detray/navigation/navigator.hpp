@@ -9,6 +9,7 @@
 #pragma once
 
 // Project include(s)
+#include "detray/core/concepts.hpp"
 #include "detray/definitions/detail/qualifiers.hpp"
 #include "detray/definitions/indexing.hpp"
 #include "detray/definitions/navigation.hpp"
@@ -22,6 +23,9 @@
 #include "detray/tracks/ray.hpp"
 #include "detray/utils/logging.hpp"
 
+// System include(s)
+#include <limits>
+
 namespace detray {
 
 /// @brief The geometry navigation class.
@@ -30,11 +34,11 @@ namespace detray {
 /// @tparam inspector_t is a validation inspector that can record information
 ///         about the navigation state at different points of the nav. flow.
 /// @tparam intersection_t candidate type
-template <
-    typename detector_t, typename inspector_t = navigation::void_inspector,
-    typename intersection_t = intersection2D<typename detector_t::surface_type,
-                                             typename detector_t::algebra_type,
-                                             !intersection::contains_pos>>
+template <concepts::detector detector_t,
+          typename inspector_t = navigation::void_inspector,
+          typename intersection_t = intersection2D<
+              typename detector_t::surface_type,
+              typename detector_t::algebra_type, !intersection::contains_pos>>
 class navigator : public navigator_base<
                       navigator<detector_t, inspector_t, intersection_t>> {
   friend class navigator_base<navigator>;
@@ -42,9 +46,13 @@ class navigator : public navigator_base<
   using scalar_t = dscalar<typename detector_t::algebra_type>;
 
  public:
+  /// Detector whose surfaces are navigated.
   using detector_type = detector_t;
+  /// Geometry context expected by the detector.
   using context_type = typename detector_type::geometry_context;
+  /// Intersection result type associated with a surface descriptor.
   using intersection_type = intersection_t;
+  /// Policy used to expose navigation diagnostics.
   using inspector_type = inspector_t;
 
   /// @brief Navigation state that contains a the current and the next
@@ -80,8 +88,11 @@ class navigator : public navigator_base<
     using candidate_const_itr_t = typename base_type::candidate_const_itr_t;
 
    public:
+    /// Value type stored in the bins or result.
     using value_type = typename base_type::candidate_t;
+    /// View type exposing inspector state.
     using view_type = detail::get_view_t<inspector_t>;
+    /// Const view type exposing inspector state.
     using const_view_type = detail::get_view_t<const inspector_t>;
 
     /// Use common methods of constructing a nvaigation state
@@ -99,12 +110,16 @@ class navigator : public navigator_base<
                             ? this->trust_level()
                             : navigation::trust_level::e_high);
     }
+    /// Preserve high trust for this single-candidate navigator.
     DETRAY_HOST_DEVICE
     constexpr void set_fair_trust() { this->set_high_trust(); }
     /// @}
 
    private:
-    /// Insert a new element @param new_cadidate before position @param pos
+    /// Consider an intersection and retain it when nearer than the next
+    /// candidate. The position argument is retained for the candidate-cache
+    /// interface and unused.
+    /// @param new_cadidate Intersection candidate to consider.
     DETRAY_HOST_DEVICE
     constexpr void insert(candidate_const_itr_t /*pos*/,
                           const intersection_type &new_cadidate) {
@@ -138,7 +153,7 @@ class navigator : public navigator_base<
   /// @tparam track_t type of track, needs to provide pos() and dir() methods
   ///
   /// @param track access to the track parameters
-  /// @param state the current navigation state
+  /// @param navigation the current navigation state
   /// @param cfg the navigation configuration
   /// @param ctx the geometry context
   template <typename track_t>

@@ -9,6 +9,7 @@
 #pragma once
 
 // Project include(s)
+#include "detray/core/concepts.hpp"
 #include "detray/definitions/indexing.hpp"
 #include "detray/io/backend/detail/grid_writer.hpp"
 #include "detray/io/frontend/payloads.hpp"
@@ -36,16 +37,23 @@ class surface_grid_writer : public detail::grid_writer {
   using base_type::base_type;
 
   /// Convert the header information into its payload
-  template <typename detector_t>
+  /// @tparam detector_t Detector type to serialize.
+  /// @param det Detector whose surface grids are written.
+  /// @param det_name Name recorded in the serialized header.
+  /// @return Header payload describing the surface grids.
+  template <detray::concepts::detector detector_t>
   static auto header_to_payload(const detector_t& det,
                                 const std::string_view det_name) {
     return grid_writer_t::header_to_payload(tag, det.accelerator_store(),
                                             det_name);
   }
 
-  /// Convert the grid collections of a detector @param det into their io
+  /// Convert the grid collections of a detector @p det into their io
   /// payload
-  template <typename detector_t>
+  /// @tparam detector_t Detector type to serialize.
+  /// @param det Detector whose acceleration structures are serialized.
+  /// @return Payload containing the surface-grid entries.
+  template <detray::concepts::detector detector_t>
   static payload_type to_payload(
       const detector_t& det, const typename detector_t::name_map& /*unused*/) {
     using surface_desc_t = typename detector_t::surface_type;

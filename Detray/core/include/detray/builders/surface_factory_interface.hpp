@@ -14,6 +14,7 @@
 #endif
 
 // Project include(s).
+#include "detray/core/concepts.hpp"
 #include "detray/definitions/detail/qualifiers.hpp"
 #include "detray/definitions/geometry.hpp"
 #include "detray/definitions/indexing.hpp"
@@ -32,10 +33,12 @@ namespace detray {
 /// so during geometry building, great care has to be taken to make sure that
 /// all components of a surface get sorted and linked into the containers
 /// together and associated with the correct surface.
-template <typename detector_t>
+template <concepts::detector detector_t>
 class surface_data {
  public:
+  /// Boundary-value collection type for one mask.
   using boundary_coll_type = std::vector<typename detector_t::scalar_type>;
+  /// Navigation link stored for each mask attached to the surface.
   using navigation_link = typename detector_t::surface_type::navigation_link;
 
   /// Parametrized constructor - surface with only one mask
@@ -46,6 +49,7 @@ class surface_data {
   /// @param mask_boundaries define the extent of the surface
   /// @param idx the index of the surface in the global detector lookup, needs
   ///            to be passed only if a special ordering should be observed
+  /// @param source Optional source identifier associated with the surface.
   DETRAY_HOST
   surface_data(
       const surface_id type, const typename detector_t::transform3_type &trf,
@@ -67,6 +71,7 @@ class surface_data {
   /// @param mask_boundaries define the extent of each mask of the surface
   /// @param idx the index of the surface in the global detector lookup, needs
   ///            to be passed only if a special ordering should be observed
+  /// @param source Optional source identifier associated with the surface.
   DETRAY_HOST
   surface_data(
       const surface_id type, const typename detector_t::transform3_type &trf,
@@ -81,7 +86,7 @@ class surface_data {
         m_boundaries{mask_boundaries},
         m_transform{trf} {}
 
-  /// Access the contained data through structured binding
+  /// @returns References to type, links, indices, source, boundaries, and transform.
   DETRAY_HOST
   auto get_data()
       -> std::tuple<surface_id &, std::vector<navigation_link> &, dindex &,
@@ -111,9 +116,10 @@ class surface_data {
 /// transforms.
 ///
 /// Can be hard coded surface generation or json reader.
-template <typename detector_t>
+template <concepts::detector detector_t>
 class surface_factory_interface {
  public:
+  /// Navigation link type used by surfaces produced by the factory.
   using navigation_link = typename detector_t::surface_type::navigation_link;
 
   surface_factory_interface() = default;
@@ -125,11 +131,13 @@ class surface_factory_interface {
 
   /// Add data to the factory
   /// @{
+  /// @param data Surface record to append.
   DETRAY_HOST
-  virtual void push_back(surface_data<detector_t> &&) = 0;
+  virtual void push_back(surface_data<detector_t> &&data) = 0;
 
+  /// @param data Surface records to append in order.
   DETRAY_HOST
-  virtual void push_back(std::vector<surface_data<detector_t>> &&) = 0;
+  virtual void push_back(std::vector<surface_data<detector_t>> &&data) = 0;
   /// @}
 
   /// Clear all data in the factory
@@ -138,6 +146,12 @@ class surface_factory_interface {
 
   /// Construct detector components from the data in the factory and add them
   /// the containers of a volume builder.
+  /// @param volume Volume receiving the generated surfaces.
+  /// @param surfaces Detector surface lookup to append to.
+  /// @param transforms Detector transform store to append to.
+  /// @param masks Detector mask store to append to.
+  /// @param ctx Geometry context used when constructing transforms.
+  /// @returns Half-open range of newly added surfaces.
   DETRAY_HOST
   virtual auto operator()(
       typename detector_t::volume_type &volume,
@@ -180,9 +194,11 @@ class surface_factory_interface {
 /// @brief Decorator for the surface factories.
 ///
 /// Delegates all mandatory method calls to the underlying surface factory
-template <typename detector_t>
+template <concepts::detector detector_t>
 class factory_decorator : public surface_factory_interface<detector_t> {
  public:
+  /// Wrap a concrete surface factory and forward interface calls to it.
+  /// @param factory Factory whose behavior is decorated.
   DETRAY_HOST
   explicit factory_decorator(
       std::unique_ptr<surface_factory_interface<detector_t>> factory)
@@ -202,6 +218,7 @@ class factory_decorator : public surface_factory_interface<detector_t> {
 
   /// Overwrite interface functions using callbacks to the base factory
   /// @{
+  /// @returns Number of surface records held by the wrapped factory.
   DETRAY_HOST
   dindex size() const override { return m_factory->size(); }
 
@@ -210,6 +227,8 @@ class factory_decorator : public surface_factory_interface<detector_t> {
     m_factory->push_back(std::move(data));
   }
 
+  /// Forward a batch of surface records to the wrapped factory.
+  /// @param data Surface records to append in order.
   DETRAY_HOST
   void push_back(std::vector<surface_data<detector_t>> &&data) override {
     m_factory->push_back(std::move(data));
@@ -219,6 +238,12 @@ class factory_decorator : public surface_factory_interface<detector_t> {
   void clear() override { m_factory->clear(); }
 
   DETRAY_HOST
+  /// @param volume Volume receiving the generated surfaces.
+  /// @param surfaces Detector surface lookup to append to.
+  /// @param transforms Detector transform store to append to.
+  /// @param masks Detector mask store to append to.
+  /// @param ctx Geometry context used when constructing transforms.
+  /// @returns Half-open range of newly added surfaces.
   auto operator()(typename detector_t::volume_type &volume,
                   typename detector_t::surface_lookup_container &surfaces,
                   typename detector_t::transform_container &transforms,

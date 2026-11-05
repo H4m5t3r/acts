@@ -9,6 +9,7 @@
 #pragma once
 
 // Project include(s)
+#include "detray/core/concepts.hpp"
 #include "detray/geometry/surface.hpp"
 #include "detray/geometry/tracking_volume.hpp"
 
@@ -24,6 +25,7 @@
 #include "actsvg/proto/volume.hpp"
 
 // System include(s)
+#include <array>
 #include <map>
 #include <string>
 #include <tuple>
@@ -36,14 +38,16 @@ namespace detray::svgtools::conversion {
 /// @param context The geometry context.
 /// @param detector The detractor the volume belongs to.
 /// @param d_volume The detray volume.
+/// @param view Projection used to convert geometry to SVG primitives.
 /// @param style the style settings
 /// @param hide_portals whether to display the volumes portals.
 /// @param hide_passives whether to display the contained passive surfaces.
 /// @param hide_grids whether to display the contained surface grid.
+/// @param hide_material whether material decorations are omitted.
 /// @param search_window neighborhood search window for the grid.
 ///
 /// @returns An actsvg proto volume representing the volume.
-template <typename detector_t, typename view_t>
+template <concepts::detector detector_t, typename view_t>
 auto volume(const typename detector_t::geometry_context& context,
             const detector_t& detector,
             const detray::tracking_volume<detector_t>& d_volume,

@@ -969,6 +969,7 @@ def addDigitization(
     doMerge: Optional[bool] = None,
     mergeCommonCorner: Optional[bool] = None,
     minEnergyDeposit: Optional[float] = None,
+    limitCylinderPathToChord: Optional[bool] = None,
     logLevel: Optional[acts.logging.Level] = None,
 ) -> acts.examples.Sequencer:
     """This function steers the digitization step
@@ -987,6 +988,9 @@ def addDigitization(
         the output folder for the Root output, None triggers no output
     rnd : RandomNumbers, None
         random number generator
+    limitCylinderPathToChord : bool, None
+        on cylinder surfaces, limit the geometric path of a hit to the longest
+        chord through the curved layer (default: off)
     """
 
     customLogLevel = acts.examples.defaultLogging(s, logLevel)
@@ -1010,6 +1014,7 @@ def addDigitization(
         **acts.examples.defaultKWArgs(
             doMerge=doMerge,
             mergeCommonCorner=mergeCommonCorner,
+            limitCylinderPathToChord=limitCylinderPathToChord,
         ),
     )
 
@@ -1027,7 +1032,6 @@ def addDigitization(
             outputDirRoot.mkdir()
         rmwConfig = acts.examples.root.RootMeasurementWriter.Config(
             inputMeasurements=digiAlg.config.outputMeasurements,
-            inputClusters=digiAlg.config.outputClusters,
             inputSimHits=digiAlg.config.inputSimHits,
             inputMeasurementSimHitsMap=digiAlg.config.outputMeasurementSimHitsMap,
             filePath=str(outputDirRoot / f"{digiAlg.config.outputMeasurements}.root"),
@@ -1036,6 +1040,11 @@ def addDigitization(
         s.addWriter(
             acts.examples.root.RootMeasurementWriter(rmwConfig, customLogLevel())
         )
+        rcwConfig = acts.examples.root.RootClusterWriter.Config(
+            inputClusters=digiAlg.config.outputClusters,
+            filePath=str(outputDirRoot / f"{digiAlg.config.outputClusters}.root"),
+        )
+        s.addWriter(acts.examples.root.RootClusterWriter(rcwConfig, customLogLevel()))
         rmpwConfig = acts.examples.root.RootMeasurementPerformanceWriter.Config(
             inputMeasurements=digiAlg.config.outputMeasurements,
             inputSimHits=digiAlg.config.inputSimHits,

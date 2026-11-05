@@ -134,6 +134,7 @@ def test_fatras(trk_geo, tmp_path, field, assert_root_hash):
 @pytest.mark.odd
 @pytest.mark.skipif(not geant4Enabled, reason="Geant4 not set up")
 @pytest.mark.skipif(not dd4hepEnabled, reason="DD4hep not set up")
+@pytest.mark.xdist_group("heavy")
 def test_geant4(tmp_path, assert_root_hash):
     # This test literally only ensures that the geant 4 example can run without erroring out
 
@@ -539,8 +540,10 @@ def test_digitization_example(trk_geo, tmp_path, assert_root_hash, digi_config_f
 
     csv_dir = tmp_path / "csv"
     root_file = tmp_path / "measurements.root"
+    cluster_file = tmp_path / "clusters.root"
 
     assert not root_file.exists()
+    assert not cluster_file.exists()
     assert not csv_dir.exists()
 
     field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
@@ -551,12 +554,14 @@ def test_digitization_example(trk_geo, tmp_path, assert_root_hash, digi_config_f
     s.run()
 
     assert root_file.exists()
+    assert cluster_file.exists()
     assert csv_dir.exists()
 
     assert len(list(csv_dir.iterdir())) == 3 * s.config.events
     assert all(f.stat().st_size > 50 for f in csv_dir.iterdir())
 
     assert_root_hash(root_file.name, root_file)
+    assert_root_hash(cluster_file.name, cluster_file)
 
 
 @pytest.mark.parametrize(
@@ -629,8 +634,10 @@ def test_digitization_example_input(
 
     csv_dir = tmp_path / "csv"
     root_file = tmp_path / "measurements.root"
+    cluster_file = tmp_path / "clusters.root"
 
     assert not root_file.exists()
+    assert not cluster_file.exists()
     assert not csv_dir.exists()
 
     assert_root_hash(
@@ -652,12 +659,14 @@ def test_digitization_example_input(
     s.run()
 
     assert root_file.exists()
+    assert cluster_file.exists()
     assert csv_dir.exists()
 
     assert len(list(csv_dir.iterdir())) == 3 * pgs.config.events
     assert all(f.stat().st_size > 50 for f in csv_dir.iterdir())
 
     assert_root_hash(root_file.name, root_file)
+    assert_root_hash(cluster_file.name, cluster_file)
 
 
 def test_digitization_config_example(trk_geo, tmp_path):
@@ -793,8 +802,68 @@ def test_pypi_finding_fitting_demo(tmp_path, generic_detector_config):
         )
         s.run()
 
-        assert len(perfWriterFinder.histograms()) > 0, "no finder histograms produced"
-        assert len(perfWriterFitter.histograms()) > 0, "no fitter histograms produced"
+        finderHistograms = perfWriterFinder.histograms()
+        fitterHistograms = perfWriterFitter.histograms()
+
+        assert len(finderHistograms) == 79
+        assert len(fitterHistograms) == 236
+
+        expectedKeys = {
+            "nStates_vs_eta",
+            "pixel_nStates_vs_eta",
+            "sstrip_nStates_vs_eta",
+            "lstrip_nStates_vs_eta",
+        }
+        assert expectedKeys <= set(finderHistograms), (
+            f"missing per-subdetector histograms: "
+            f"{expectedKeys - set(finderHistograms)}"
+        )
+
+        finderStats = perfWriterFinder.stats()
+        expectedStatsKeys = {
+            "nTotalTracks",
+            "nTotalMatchedTracks",
+            "nTotalFakeTracks",
+            "nTotalDuplicateTracks",
+            "nTotalUnmatchedTracks",
+            "nTotalTracksMissingRefSurface",
+            "nTotalMeasurements",
+            "nTotalOutliers",
+            "nTotalHoles",
+            "nTotalSharedHits",
+            "nTotalParticles",
+            "nTotalMatchedParticles",
+            "nTotalDuplicateParticles",
+            "nTotalFakeParticles",
+            "nTotalQualityTracks",
+            "efficiencyTracks",
+            "fakeRatioTracks",
+            "duplicateRatioTracks",
+            "efficiencyParticles",
+            "fakeRatioParticles",
+            "duplicateRatioParticles",
+            "meanCompleteness",
+            "meanPurity",
+            "subDetectors",
+        }
+        assert expectedStatsKeys <= set(
+            finderStats
+        ), f"missing stats keys: {expectedStatsKeys - set(finderStats)}"
+        assert finderStats["nTotalTracks"] > 0
+
+        expectedSubDetectorKeys = {
+            "nTrackStates",
+            "nMeasurements",
+            "nOutliers",
+            "nHoles",
+            "nSharedHits",
+        }
+        assert set(finderStats["subDetectors"]) == {"pixel", "sstrip", "lstrip"}
+        for name, sub in finderStats["subDetectors"].items():
+            assert expectedSubDetectorKeys <= set(sub), (
+                f"missing stats keys for {name}: "
+                f"{expectedSubDetectorKeys - set(sub)}"
+            )
 
 
 @pytest.mark.skipif(not dd4hepEnabled, reason="DD4hep not set up")
@@ -830,6 +899,7 @@ def test_full_chain_odd_example(tmp_path):
     not dd4hepEnabled or not geant4Enabled, reason="DD4hep and/or Geant4 not set up"
 )
 @pytest.mark.slow
+@pytest.mark.xdist_group("heavy")
 def test_full_chain_odd_example_pythia_geant4(tmp_path):
     # This test literally only ensures that the full chain example can run without erroring out
 
@@ -973,7 +1043,7 @@ def assert_gnn_output(output_dir: Path):
 
 @pytest.mark.parametrize("hardware", ["cpu", "gpu"])
 @pytest.mark.skipif(not gnnEnabled, reason="Gnn environment not set up")
-def test_gnn_metric_learning(tmp_path, trk_geo, field, hardware):
+def test_gnn_metric_learning(tmp_path, trk_geo, field, assert_root_hash, hardware):
     """Test GNN track finding with metric learning graph construction"""
     if hardware == "cpu":
         pytest.skip("CPU not yet supported")
@@ -1018,6 +1088,8 @@ def test_gnn_metric_learning(tmp_path, trk_geo, field, hardware):
         raise
 
     assert_gnn_output(tmp_path)
+    for f in root_files:
+        assert_root_hash(f, tmp_path / f)
 
 
 @pytest.mark.odd
@@ -1083,7 +1155,7 @@ def test_gnn_shrink_nodes_same_output(tmp_path, hardware):
 @pytest.mark.skipif(not gnnEnabled, reason="Gnn environment not set up")
 @pytest.mark.parametrize("backend", ["torch", "onnx"])
 @pytest.mark.parametrize("hardware", ["gpu"])
-def test_gnn_module_map(tmp_path, backend, hardware):
+def test_gnn_module_map(tmp_path, assert_root_hash, backend, hardware):
     """Test GNN track finding with module map graph construction on ODD"""
     from gnn_module_map_odd import runGnnModuleMap
     from acts.examples.odd import getOpenDataDetector
@@ -1137,6 +1209,10 @@ def test_gnn_module_map(tmp_path, backend, hardware):
 
     # Verify output
     assert_gnn_output(tmp_path)
+    assert_root_hash("ntuple_finding_gnn.root", tmp_path / "ntuple_finding_gnn.root")
+    assert_root_hash(
+        "performance_finding_gnn.root", tmp_path / "performance_finding_gnn.root"
+    )
 
 
 @pytest.mark.odd
@@ -1279,6 +1355,7 @@ def test_strip_space_points(detector_config, field, tmp_path, assert_root_hash):
 @pytest.mark.skipif(not geant4Enabled, reason="Geant4 not set up")
 @pytest.mark.skipif(not geomodelEnabled, reason="Geomodel not set up")
 @pytest.mark.slow
+@pytest.mark.xdist_group("heavy")
 def test_geomodel_G4(tmp_path):
     script = (
         Path(__file__).parent.parent.parent.parent
@@ -1299,7 +1376,40 @@ def test_geomodel_G4(tmp_path):
         str(mockup_det),
         "--outDir",
         str(out_dir),
+        # The script defaults to 100 events, which made this the slowest and
+        # most memory-hungry test; only the output is checked here.
+        "--nEvents",
+        "5",
     ]
     subprocess.check_call(args)
 
     assert (out_dir / "obj").exists()
+
+
+@pytest.mark.skipif(not geant4Enabled, reason="Geant4 not set up")
+@pytest.mark.skipif(not geomodelEnabled, reason="Geomodel not set up")
+@pytest.mark.slow
+@pytest.mark.xdist_group("heavy")
+def test_geomodel_G4_propagation(tmp_path):
+    script = (
+        Path(__file__).parent.parent.parent.parent
+        / "Examples"
+        / "Scripts"
+        / "Python"
+        / "propagate_mockup.py"
+    )
+    assert script.exists()
+    mockup_det = "Muon"
+    out_dir = tmp_path / "geomodel_g4_muon_propagation"
+    out_dir.mkdir()
+    args = [
+        "python3",
+        str(script),
+        "--mockupDetector",
+        str(mockup_det),
+        "--outDir",
+        str(out_dir),
+    ]
+    subprocess.check_call(args)
+
+    assert out_dir.exists()

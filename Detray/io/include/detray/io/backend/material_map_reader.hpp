@@ -11,6 +11,7 @@
 // Project include(s)
 #include "detray/builders/detector_builder.hpp"
 #include "detray/builders/material_map_builder.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/geometry/concepts.hpp"
 #include "detray/io/backend/detail/basic_converter.hpp"
 #include "detray/io/backend/detail/type_info.hpp"
@@ -35,20 +36,25 @@ class material_map_reader {
   using material_reader_t = homogeneous_material_reader;
 
  public:
+  /// Dimension of the material-grid bin index.
   static constexpr std::size_t dim{DIM()};
 
   /// Payload type that the reader processes
   using payload_type =
       detector_grids_payload<surface_material_payload, io::material_id>;
 
+  /// Multi-axis bin index type used by material grids.
   using bin_index_type = axis::multi_bin<dim>;
 
   /// Tag the reader as "material_maps"
   static constexpr std::string_view tag = "material_maps";
 
-  /// Convert the material grids @param grids_data from their IO
+  /// Convert the material grids @p grids_data from their IO
   /// payload
-  template <typename detector_t>
+  /// @tparam detector_t Detector type being constructed.
+  /// @param det_builder Builder receiving the material grids.
+  /// @param grids_data Serialized material-grid payload, consumed by the reader.
+  template <concepts::detector detector_t>
   static void from_payload(detector_builder<typename detector_t::metadata,
                                             volume_builder> &det_builder,
                            payload_type &&grids_data) {
@@ -174,7 +180,8 @@ class material_map_reader {
 
  private:
   /// Get the detector material id from the payload material type id
-  template <typename mat_registry_t, typename detector_t, std::size_t I = 0u>
+  template <typename mat_registry_t, concepts::detector detector_t,
+            std::size_t I = 0u>
   static typename detector_t::material::id from_payload(
       io::material_id type_id) {
     // Get the next mask shape type

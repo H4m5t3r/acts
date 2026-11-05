@@ -8,35 +8,29 @@
 
 #pragma once
 
-#include "Acts/Definitions/Units.hpp"
+#include "Acts/Definitions/Algebra.hpp"
 #include "Acts/EventData/ParticleHypothesis.hpp"
 #include "Acts/Geometry/TrackingGeometry.hpp"
 #include "Acts/MagneticField/MagneticFieldProvider.hpp"
 #include "Acts/Utilities/Logger.hpp"
 #include "ActsExamples/EventData/ProtoTrack.hpp"
 #include "ActsExamples/EventData/Seed.hpp"
-#include "ActsExamples/EventData/SeedSpacePointSelection.hpp"
 #include "ActsExamples/EventData/Track.hpp"
 #include "ActsExamples/Framework/DataHandle.hpp"
 #include "ActsExamples/Framework/IAlgorithm.hpp"
 #include "ActsExamples/Framework/ProcessCode.hpp"
+#include "ActsExamples/TrackFinding/SeedParamsEstimator.hpp"
 
-#include <array>
+#include <cstddef>
 #include <memory>
 #include <string>
 
 namespace ActsExamples {
 
-/// Estimate track parameters for track seeds.
+/// Estimate track parameters from the space points of a seed.
 ///
-/// The algorithm takes the either directly the seeds or indirectly the proto
-/// tracks and space points, and source links container as input. The proto
-/// track is basically a seed and its space points info could be retrieved from
-/// the space point container. The source links container is necessary to
-/// retrieve the geometry identifier of the module at which a space point is
-/// located. It creates two additional container to the event store, i.e. the
-/// estimated track parameters container and the proto tracks container storing
-/// only those proto tracks with track parameters estimated.
+/// Seeds without an estimate are dropped. Optional input seeds and proto
+/// tracks are written back out filtered the same way.
 class TrackParamsEstimationAlgorithm final : public IAlgorithm {
  public:
   struct Config {
@@ -56,45 +50,18 @@ class TrackParamsEstimationAlgorithm final : public IAlgorithm {
     /// estimation are propagated (optional)
     std::optional<std::string> outputProtoTracks;
 
+    /// Input free track parameters per seed, used instead of the fit to the
+    /// space points (optional).
+    std::optional<std::string> inputFreeParameters;
+
+    /// The estimate of the parameters from the seeds. An unset geometry or
+    /// field is taken from this config.
+    SeedParamsEstimator::Config seedParamsEstimation;
+
     /// Tracking geometry for surface lookup.
     std::shared_ptr<const Acts::TrackingGeometry> trackingGeometry;
     /// Magnetic field variant.
     std::shared_ptr<const Acts::MagneticFieldProvider> magneticField;
-
-    /// The minimum magnetic field to trigger the track parameters estimation
-    double bFieldMin = 0.1 * Acts::UnitConstants::T;
-
-    /// Which space points of the seed feed the estimate. Seeds for which the
-    /// selection cannot be made are skipped.
-    SeedSpacePointSelection spacePointSelection =
-        SeedSpacePointSelection::FirstThree;
-    /// Minimum transverse distance between the selected space points. Only the
-    /// triplet selections apply it.
-    double minTransverseDistance = 10 * Acts::UnitConstants::mm;
-
-    /// Initial sigmas for the track parameters.
-    std::array<double, 6> initialSigmas = {
-        1 * Acts::UnitConstants::mm,
-        1 * Acts::UnitConstants::mm,
-        1 * Acts::UnitConstants::degree,
-        1 * Acts::UnitConstants::degree,
-        0 * Acts::UnitConstants::e / Acts::UnitConstants::GeV,
-        1 * Acts::UnitConstants::ns};
-    /// Initial sigma(q/pt) for the track parameters.
-    /// @note The resulting q/p sigma is added to the one in `initialSigmas`
-    double initialSigmaQoverPt =
-        0.1 * Acts::UnitConstants::e / Acts::UnitConstants::GeV;
-    /// Initial sigma(pt)/pt for the track parameters.
-    /// @note The resulting q/p sigma is added to the one in `initialSigmas`
-    double initialSigmaPtRel = 0.1;
-    /// Inflate initial covariance.
-    std::array<double, 6> initialVarInflation = {1., 1., 1., 1., 1., 1.};
-    /// Inflate time covariance if no time measurement is available.
-    double noTimeVarInflation = 100.;
-
-    /// Particle hypothesis.
-    Acts::ParticleHypothesis particleHypothesis =
-        Acts::ParticleHypothesis::pion();
   };
 
   /// Construct the track parameters making algorithm.
@@ -115,11 +82,15 @@ class TrackParamsEstimationAlgorithm final : public IAlgorithm {
 
  private:
   Config m_cfg;
+  SeedParamsEstimator m_estimator;
 
   ReadDataHandle<SeedContainer> m_inputSeeds{this, "InputSeeds"};
   ReadDataHandle<ProtoTrackContainer> m_inputTracks{this, "InputTracks"};
   ReadDataHandle<std::vector<Acts::ParticleHypothesis>>
       m_inputParticleHypotheses{this, "InputParticleHypotheses"};
+
+  ReadDataHandle<std::vector<Acts::FreeVector>> m_inputFreeParameters{
+      this, "InputFreeParameters"};
 
   WriteDataHandle<TrackParametersContainer> m_outputTrackParameters{
       this, "OutputTrackParameters"};

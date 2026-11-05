@@ -9,6 +9,7 @@
 #pragma once
 
 // Project include(s).
+#include "detray/builders/detail/material_deduplication.hpp"
 #include "detray/builders/homogeneous_material_factory.hpp"
 #include "detray/builders/homogeneous_material_generator.hpp"
 #include "detray/builders/volume_builder.hpp"
@@ -30,8 +31,12 @@ namespace detray {
 template <typename detector_t>
 class homogeneous_material_builder final : public volume_decorator<detector_t> {
  public:
+  /// Material collection identifier enum supplied by the detector.
   using material_id = typename detector_t::material::id;
+  /// Scalar type used by the detector's material definitions.
   using scalar_type = dscalar<typename detector_t::algebra_type>;
+
+  static_assert(concepts::detector<detector_t>);
 
   /// @param vol_builder volume builder that should be decorated with material
   DETRAY_HOST
@@ -48,6 +53,8 @@ class homogeneous_material_builder final : public volume_decorator<detector_t> {
 
   /// Overwrite, to add material in addition to surfaces (only if surfaces are
   /// present in the factory, otherwise only add material)
+  /// @param sf_factory Factory that supplies surfaces and/or material data.
+  /// @param ctx Geometry context forwarded to the decorated volume builder.
   /// @{
   DETRAY_HOST
   void add_surfaces(
@@ -85,15 +92,39 @@ class homogeneous_material_builder final : public volume_decorator<detector_t> {
   }
   /// @}
 
-  /// Add the volume and the material to the detector @param det
+  /// Add the volume and the material to the detector @p det
+  /// @param det Detector that receives material data.
+  /// @param opt Options controlling volume construction.
+  /// @param ctx Geometry context used by the decorated builder.
+  /// @returns Pointer to the constructed volume.
   DETRAY_HOST
-  auto build(detector_t &det, typename detector_t::geometry_context ctx = {}) ->
+  auto build(detector_t &det, const volume_builder_options &opt,
+             typename detector_t::geometry_context ctx = {}) ->
       typename detector_t::volume_type * override {
     DETRAY_VERBOSE_HOST("Build homogeneous material...");
 
-    const auto &material = det.material_store();
-
     DETRAY_DEBUG_HOST("-> n_surfaces=" << this->surfaces().size());
+
+    if (opt.deduplicate()) {
+      add_deduplicated_material(det);
+    } else {
+      add_material(det);
+    }
+
+    DETRAY_VERBOSE_HOST(
+        "Successfully built homogeneous material for volume: " << this->name());
+
+    // Call the underlying volume builder(s) and give the volume to the
+    // next decorator
+    return volume_decorator<detector_t>::build(det, opt, ctx);
+  }
+
+ private:
+  /// Append the material of the volume to the detector @param det and shift
+  /// the surface material links accordingly
+  DETRAY_HOST
+  void add_material(detector_t &det) {
+    const auto &material = det.material_store();
 
     // Update the surface material links and shift them according to the
     // number of material slabs/rods that were in the detector previously
@@ -131,26 +162,63 @@ class homogeneous_material_builder final : public volume_decorator<detector_t> {
     }
 
     // Add material to the detector
-
-    if constexpr (types::contains<typename detector_t::material,
-                                  material_rod<scalar_type>>) {
-      DETRAY_DEBUG_HOST(
-          "-> Appending "
-          << m_materials.template size<material_id::e_material_rod>()
-          << " rods into detector materials");
-    }
     det._materials.append(std::move(m_materials));
     m_materials.clear_all();
-
-    DETRAY_VERBOSE_HOST(
-        "Successfully built homogeneous material for volume: " << this->name());
-
-    // Call the underlying volume builder(s) and give the volume to the
-    // next decorator
-    return volume_decorator<detector_t>::build(det, ctx);
   }
 
- private:
+  /// Add only the material of the volume to the detector @param det that is
+  /// not yet present there and link the surfaces to the existing entries
+  /// otherwise
+  DETRAY_HOST
+  void add_deduplicated_material(detector_t &det) {
+    DETRAY_VERBOSE_HOST("-> Deduplicate homogeneous material");
+
+    if constexpr (concepts::has_material_slabs<detector_t>) {
+      deduplicate<material_id::e_material_slab>(det);
+    }
+    if constexpr (concepts::has_material_rods<detector_t>) {
+      deduplicate<material_id::e_material_rod>(det);
+    }
+
+    // Add remaining material types, if any
+    det._materials.append(std::move(m_materials));
+    m_materials.clear_all();
+  }
+
+  /// Deduplicate the material of type @tparam mat_id against the material in
+  /// the detector @param det
+  template <material_id mat_id>
+  DETRAY_HOST void deduplicate(detector_t &det) {
+    auto &local_coll = m_materials.template get<mat_id>();
+    if (local_coll.empty()) {
+      return;
+    }
+
+    auto &det_coll = det._materials.template get<mat_id>();
+    [[maybe_unused]] const std::size_t n_before{det_coll.size()};
+
+    // Global index for every volume local material entry
+    detail::homogeneous_material_lookup lookup{det_coll};
+    std::vector<dindex> global_idx;
+    global_idx.reserve(local_coll.size());
+    for (const auto &mat : local_coll) {
+      global_idx.push_back(lookup.insert(mat));
+    }
+
+    for (auto &sf : this->surfaces()) {
+      if (sf.material().id() == mat_id) {
+        sf.material().set_index(global_idx.at(sf.material().index()));
+        DETRAY_DEBUG_HOST("-> sf=" << sf
+                                   << ": material now: " << sf.material());
+      }
+    }
+
+    DETRAY_DEBUG_HOST("-> Appended " << det_coll.size() - n_before << " of "
+                                     << local_coll.size() << " entries of type "
+                                     << mat_id << " to detector materials");
+    local_coll.clear();
+  }
+
   // Material container for this volume
   typename detector_t::material_container m_materials{};
 };

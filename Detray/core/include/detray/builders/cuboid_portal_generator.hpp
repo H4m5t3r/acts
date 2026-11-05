@@ -10,6 +10,7 @@
 
 // Project include(s)
 #include "detray/builders/surface_factory_interface.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/core/detail/data_context.hpp"
 #include "detray/definitions/detail/qualifiers.hpp"
 #include "detray/definitions/geometry.hpp"
@@ -29,7 +30,7 @@ namespace detray {
 /// @brief Generates a portal box around a volume that already contains surfaces
 ///
 /// @tparam detector_t the type of detector the volume belongs to.
-template <typename detector_t>
+template <concepts::detector detector_t>
 class cuboid_portal_generator final
     : public surface_factory_interface<detector_t> {
   using algebra_type = typename detector_t::algebra_type;
@@ -70,6 +71,8 @@ class cuboid_portal_generator final
   DETRAY_HOST
   void push_back(
       surface_data<detector_t> && /*unused*/) override { /*Do nothing*/ }
+  /// Ignore inserted surfaces; this factory derives portals from the volume's
+  /// existing surfaces when invoked.
   DETRAY_HOST
   auto push_back(std::vector<surface_data<detector_t>> && /*unused*/)
       -> void override { /*Do nothing*/ }
@@ -82,6 +85,7 @@ class cuboid_portal_generator final
   /// @param transforms the transforms of the surfaces.
   /// @param masks the masks of the surfaces.
   /// @param ctx the geometry context (not needed for portals).
+  /// @returns The half-open range of newly appended portal surfaces.
   DETRAY_HOST
   auto operator()(typename detector_t::volume_type &volume,
                   typename detector_t::surface_lookup_container &surfaces,

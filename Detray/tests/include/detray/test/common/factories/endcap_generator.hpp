@@ -10,6 +10,7 @@
 
 // Project include(s)
 #include "detray/builders/surface_factory_interface.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/core/detail/data_context.hpp"
 #include "detray/definitions/algebra.hpp"
 #include "detray/definitions/detail/qualifiers.hpp"
@@ -61,22 +62,37 @@ struct endcap_generator_config {
 
   /// Setters
   /// @{
+  /// @brief Set the side.
+  /// @param s endcap side
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &side(const int s) {
     m_side = s;
     return *this;
   }
+  /// @brief Set the center.
+  /// @param z center position along z
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &center(const scalar_t z) {
     m_center_z = std::abs(z);
     return *this;
   }
+  /// @brief Set the inner radius.
+  /// @param r inner radius
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &inner_radius(const scalar_t r) {
     m_inner_radius = r;
     return *this;
   }
+  /// @brief Set the outer radius.
+  /// @param r outer radius
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &outer_radius(const scalar_t r) {
     m_outer_radius = r;
     return *this;
   }
+  /// @brief Set the module bounds.
+  /// @param bnds module mask boundaries for each ring
+  /// @return reference to the updated configuration
   endcap_generator_config &module_bounds(
       const std::vector<std::vector<scalar_t>> &bnds) {
     m_mask_values.clear();
@@ -84,25 +100,40 @@ struct endcap_generator_config {
     m_mask_values.push_back(bnds.at(1));
     return *this;
   }
+  /// @brief Set the ring stagger.
+  /// @param rs stagger between rings
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &ring_stagger(const scalar_t rs) {
     m_ring_stagger = rs;
     return *this;
   }
+  /// @brief Set the phi stagger.
+  /// @param ps stagger values in phi
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &phi_stagger(
       const std::vector<scalar_t> &ps) {
     m_phi_stagger = ps;
     return *this;
   }
+  /// @brief Set the phi sub stagger.
+  /// @param ps sub-stagger values in phi
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &phi_sub_stagger(
       const std::vector<scalar_t> &ps) {
     m_phi_sub_stagger = ps;
     return *this;
   }
+  /// @brief Set the module tilt.
+  /// @param t module tilt values
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &module_tilt(
       const std::vector<scalar_t> &t) {
     m_tilt = t;
     return *this;
   }
+  /// @brief Set the binning.
+  /// @param b number of modules in phi for each ring
+  /// @return reference to the updated configuration
   constexpr endcap_generator_config &binning(
       const std::vector<unsigned int> &b) {
     m_binning = b;
@@ -112,15 +143,35 @@ struct endcap_generator_config {
 
   /// Getters
   /// @{
+  /// @brief Return the side.
+  /// @return configured side
   constexpr int side() const { return m_side; }
+  /// @brief Return the center.
+  /// @return configured center
   constexpr scalar_t center() const { return m_center_z; }
+  /// @brief Return the inner radius.
+  /// @return configured inner radius
   constexpr scalar_t inner_radius() const { return m_inner_radius; }
+  /// @brief Return the outer radius.
+  /// @return configured outer radius
   constexpr scalar_t outer_radius() const { return m_outer_radius; }
+  /// @brief Return the module bounds.
+  /// @return configured module bounds
   const auto &module_bounds() const { return m_mask_values; }
+  /// @brief Return the ring stagger.
+  /// @return configured ring stagger
   constexpr scalar_t ring_stagger() const { return m_ring_stagger; }
+  /// @brief Return the phi stagger.
+  /// @return configured phi stagger
   constexpr const auto &phi_stagger() const { return m_phi_stagger; }
+  /// @brief Return the phi sub stagger.
+  /// @return configured phi sub stagger
   constexpr const auto &phi_sub_stagger() const { return m_phi_sub_stagger; }
+  /// @brief Return the module tilt.
+  /// @return configured module tilt
   constexpr const auto &module_tilt() const { return m_tilt; }
+  /// @brief Return the binning.
+  /// @return configured binning
   constexpr const auto &binning() const { return m_binning; }
   /// @}
 };
@@ -128,7 +179,7 @@ struct endcap_generator_config {
 /// @brief Generates surfaces for an endcap layer consisting of two rings
 ///
 /// @tparam detector_t the type of detector the layer should be added to
-template <typename detector_t, typename mask_shape_t = trapezoid2D>
+template <concepts::detector detector_t, typename mask_shape_t = trapezoid2D>
 class endcap_generator final : public surface_factory_interface<detector_t> {
   using algebra_t = typename detector_t::algebra_type;
   using scalar_t = dscalar<algebra_t>;
@@ -160,6 +211,7 @@ class endcap_generator final : public surface_factory_interface<detector_t> {
   void push_back(
       surface_data<detector_t> && /*unused*/) override { /*Do nothing*/ }
   DETRAY_HOST
+  /// @brief Ignore supplied surface data because this factory generates its own.
   auto push_back(std::vector<surface_data<detector_t>> && /*unused*/)
       -> void override { /*Do nothing*/ }
   /// @}
@@ -172,6 +224,7 @@ class endcap_generator final : public surface_factory_interface<detector_t> {
   /// @param masks the masks of the surfaces.
   /// @param ctx the geometry context (not needed for portals).
   DETRAY_HOST
+  /// @return range of generated surfaces
   auto operator()(typename detector_t::volume_type &volume,
                   typename detector_t::surface_lookup_container &surfaces,
                   typename detector_t::transform_container &transforms,
@@ -292,13 +345,15 @@ class endcap_generator final : public surface_factory_interface<detector_t> {
 
       // Build the mask for this ring
       std::vector<scalar_t> mask_values{m_cfg.module_bounds().at(ir)};
+      assert(!mask_values.empty());
 
       // Precompute trapezoid divisor
       if constexpr (std::is_same_v<mask_shape_t, trapezoid2D>) {
         const scalar_t div{
             1.f / (2.f * mask_values.at(trapezoid2D::e_half_length_2))};
 
-        mask_values.insert(mask_values.begin() + trapezoid2D::e_divisor, div);
+        mask_values.resize(trapezoid2D::e_size);
+        mask_values.at(trapezoid2D::e_divisor) = div;
       }
 
       masks.template emplace_back<mask_id>(empty_context{}, mask_values,
@@ -311,8 +366,8 @@ class endcap_generator final : public surface_factory_interface<detector_t> {
  private:
   /// Helper method for positioning of modules in an endcap ring
   ///
-  /// @param z is the z position of the ring
   /// @param radius is the ring radius
+  /// @param z is the position of the ring along the detector axis
   /// @param phi_stagger is the radial staggering along phi
   /// @param phi_sub_stagger is the overlap of the modules
   /// @param n_phi_bins is the number of bins in phi

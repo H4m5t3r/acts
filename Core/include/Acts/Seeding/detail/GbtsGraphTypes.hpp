@@ -8,8 +8,10 @@
 
 #pragma once
 
+#include "Acts/EventData/StripSpacePointCalibrationDetails.hpp"
 #include "Acts/EventData/Types.hpp"
 #include "Acts/Seeding/GbtsLayerDescription.hpp"
+#include "Acts/Seeding/GbtsTauLookupTable.hpp"
 
 #include <array>
 #include <cstdint>
@@ -20,24 +22,14 @@
 
 namespace Acts::Experimental::detail {
 
-/// Accepted |cot(theta)| range for one cluster width bin. A cluster near the
-/// module edge may be shortened, hence the second pair.
-struct GbtsTauBounds final {
-  /// Minimum accepted |cot(theta)|.
-  float minTau{};
-  /// Maximum accepted |cot(theta)|. Negative means undertrained: do not cut.
-  float maxTau{};
-  /// Minimum accepted |cot(theta)| near the module edge.
-  float minTauNearEdge{};
-  /// Maximum accepted |cot(theta)| near the module edge. Negative as above.
-  float maxTauNearEdge{};
-};
-
-/// Tau bounds per cluster width, one entry per 0.05 mm, indexed not searched.
-using GbtsTauLookupTable = std::vector<GbtsTauBounds>;
-
 /// Maximum number of neighbouring edges recorded per graph edge
 static constexpr std::uint32_t kGbtsMaxEdgeNeighbours = 6;
+
+/// Bins of the per-node z0 histogram, which is kept as a bit mask in
+/// GbtsNodeEdgeInfo::isConnected and so may not exceed its width.
+static constexpr std::int32_t kGbtsZ0HistogramBins = 16;
+static_assert(kGbtsZ0HistogramBins <=
+              std::numeric_limits<std::uint16_t>::digits);
 
 //! [gbts node params]
 /// Per-node parameters used while building the graph.
@@ -87,7 +79,13 @@ struct GbtsEtaBinInfo final {
 
   float minRadius{};
   float maxRadius{};
-  std::uint32_t layerId{0};
+  /// Inside-out pixel barrel ordinal of the bin's layer, -1 for the rest.
+  std::int32_t barrelOrder{-1};
+
+  /// Type of the layer this bin belongs to.
+  GbtsLayerType type{};
+  /// Technology of the layer this bin belongs to.
+  GbtsLayerTechnology technology{};
 
   /// Check if bin is empty
   /// @return True if bin has no nodes
@@ -97,6 +95,10 @@ struct GbtsEtaBinInfo final {
 
 class GbtsNodeProxy;
 
+/// What a node's entry in `GbtsNodeView::stripIndex` holds when it carries no
+/// stereo pair, i.e. when it is a pixel node.
+constexpr std::uint32_t kNoStrip = std::numeric_limits<std::uint32_t>::max();
+
 /// Read-only view of the node attributes needed outside the graph builder.
 ///
 /// Positions are packed as (x, y, z, r) because every consumer reads them
@@ -105,12 +107,28 @@ struct GbtsNodeView final {
   /// Packed (x, y, z, r) per node.
   std::span<const std::array<float, 4>> positions;
   /// Dense layer index per node.
-  std::span<const std::uint16_t> layers;
+  std::span<const GbtsLayerIndex> layers;
+  /// Stereo pairs of the strip nodes, reached through `stripIndex`.
+  std::span<const OuterStripSpacePointCalibrationDetailsDerived> strips;
+  /// Index into `strips` per node, `kNoStrip` where a node carries none.
+  /// Empty when nothing does.
+  std::span<const std::uint32_t> stripIndex;
 
   /// Handle on a single node.
   /// @param index Index of the node
   /// @return Proxy for the node
   GbtsNodeProxy operator[](SpacePointIndex index) const;
+
+  /// The stereo pair a node was formed from.
+  /// @param index Index of the node
+  /// @return The pair, or null for a pixel node
+  const OuterStripSpacePointCalibrationDetailsDerived* strip(
+      SpacePointIndex index) const {
+    if (stripIndex.empty() || stripIndex[index] == kNoStrip) {
+      return nullptr;
+    }
+    return &strips[stripIndex[index]];
+  }
 };
 
 /// Read-only handle on a single graph node.
@@ -135,7 +153,7 @@ class GbtsNodeProxy final {
   /// @return Transverse distance from the beamline
   float r() const { return position()[3]; }
   /// @return Dense layer index
-  std::uint16_t layer() const { return m_view->layers[m_index]; }
+  GbtsLayerIndex layer() const { return m_view->layers[m_index]; }
 
  private:
   const std::array<float, 4>& position() const {
@@ -158,33 +176,34 @@ struct GbtsEdge final {
   /// Constructor
   /// @param n1_ Inner node index
   /// @param n2_ Outer node index
-  /// @param n2LayerId_ GBTS layer ID of the outer node
+  /// @param tauRatioCut_ Tau ratio cut of this doublet as an outer pair
+  /// @param n2PixelBarrel_ Whether the outer node is on the pixel barrel
   /// @param p1_ First fit parameter
   /// @param p2_ Second fit parameter
   /// @param p3_ Third fit parameter
-  GbtsEdge(SpacePointIndex n1_, SpacePointIndex n2_, std::uint32_t n2LayerId_,
-           float p1_, float p2_, float p3_)
+  GbtsEdge(SpacePointIndex n1_, SpacePointIndex n2_, float tauRatioCut_,
+           bool n2PixelBarrel_, float p1_, float p2_, float p3_)
       : n1{n1_},
         n2{n2_},
-        level{1},
-        next{1},
+        n2PixelBarrel{n2PixelBarrel_},
         p{p1_, p2_, p3_},
-        n2LayerId{n2LayerId_} {}
+        tauRatioCut{tauRatioCut_} {}
 
   /// Inner node of the edge
   SpacePointIndex n1{kSpacePointIndexInvalid};
   /// Outer node of the edge
   SpacePointIndex n2{kSpacePointIndexInvalid};
 
-  std::int8_t level{-1};
-  std::int8_t next{-1};
-
   std::uint8_t nNei{0};
+
+  /// Whether the outer node is on the pixel barrel. Sits in padding.
+  bool n2PixelBarrel{};
+
   std::array<float, 3> p{};
 
-  /// GBTS layer ID of the outer node. Cached next to the fit parameters so the
-  /// innermost neighbour loop does not have to chase the node.
-  std::uint32_t n2LayerId{0};
+  /// GbtsLayerConnection::tauRatioCutOuter of this doublet's layer pair,
+  /// cached for the neighbour loop.
+  float tauRatioCut{};
 
   std::array<std::uint32_t, kGbtsMaxEdgeNeighbours> vNei{};
 };

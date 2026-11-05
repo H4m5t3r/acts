@@ -10,6 +10,7 @@
 
 // Project include(s)
 #include "detray/builders/surface_factory_interface.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/core/detail/data_context.hpp"
 #include "detray/definitions/algebra.hpp"
 #include "detray/definitions/detail/qualifiers.hpp"
@@ -41,18 +42,30 @@ struct wire_layer_generator_config {
 
   /// Setters
   /// @{
+  /// @brief Set the half length.
+  /// @param hz half length along z
+  /// @return reference to the updated configuration
   constexpr wire_layer_generator_config &half_length(const scalar_t hz) {
     m_half_z = hz;
     return *this;
   }
+  /// @brief Set the cell size.
+  /// @param c cell size
+  /// @return reference to the updated configuration
   constexpr wire_layer_generator_config &cell_size(const scalar_t c) {
     m_cell_size = c;
     return *this;
   }
+  /// @brief Set the stereo angle.
+  /// @param angle stereo angle
+  /// @return reference to the updated configuration
   constexpr wire_layer_generator_config &stereo_angle(const scalar_t angle) {
     m_stereo_angle = angle;
     return *this;
   }
+  /// @brief Set the inner layer radius.
+  /// @param r inner layer radius
+  /// @return reference to the updated configuration
   constexpr wire_layer_generator_config &inner_layer_radius(const scalar_t r) {
     m_layer_radius = r;
     return *this;
@@ -61,9 +74,17 @@ struct wire_layer_generator_config {
 
   /// Getters
   /// @{
+  /// @brief Return the half length.
+  /// @return configured half length
   constexpr scalar_t half_length() const { return m_half_z; }
+  /// @brief Return the cell size.
+  /// @return configured cell size
   constexpr scalar_t cell_size() const { return m_cell_size; }
+  /// @brief Return the stereo angle.
+  /// @return configured stereo angle
   constexpr scalar_t stereo_angle() const { return m_stereo_angle; }
+  /// @brief Return the inner layer radius.
+  /// @return configured inner layer radius
   constexpr scalar_t inner_layer_radius() const { return m_layer_radius; }
   /// @}
 };
@@ -72,7 +93,7 @@ struct wire_layer_generator_config {
 ///
 /// @tparam detector_t the type of detector the layer should be added to
 /// @tparam mask_shape_t the shape for the drift cells or straw tubes
-template <typename detector_t, typename mask_shape_t = line_square>
+template <concepts::detector detector_t, typename mask_shape_t = line_square>
 class wire_layer_generator final
     : public surface_factory_interface<detector_t> {
   using algebra_t = typename detector_t::algebra_type;
@@ -107,6 +128,7 @@ class wire_layer_generator final
   void push_back(
       surface_data<detector_t> && /*unused*/) override { /*Do nothing*/ }
   DETRAY_HOST
+  /// @brief Ignore supplied surface data because this factory generates its own.
   auto push_back(std::vector<surface_data<detector_t>> && /*unused*/)
       -> void override { /*Do nothing*/ }
   /// @}
@@ -119,6 +141,7 @@ class wire_layer_generator final
   /// @param masks the masks of the surfaces.
   /// @param ctx the geometry context (not needed for portals).
   DETRAY_HOST
+  /// @return range of generated surfaces
   auto operator()(typename detector_t::volume_type &volume,
                   typename detector_t::surface_lookup_container &surfaces,
                   typename detector_t::transform_container &transforms,

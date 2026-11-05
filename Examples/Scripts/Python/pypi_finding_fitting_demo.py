@@ -418,7 +418,7 @@ def runPypiFindingFittingDemo(
                     sf = surface_map[isl.geometryId()]
 
                     trackState = track.appendTrackState()
-                    trackState.typeFlags.isMeasurement = True
+                    trackState.typeFlags.setIsMeasurement()
                     trackState.uncalibratedSourceLink = sl
                     trackState.referenceSurface = sf
 
@@ -441,19 +441,27 @@ def runPypiFindingFittingDemo(
         )
     )
 
+    #! [Python pattern-recognition performance writer]
     # SET TO VERBOSE (DEBUG) MODE
-    cfg = acts.examples.PythonTrackFinderPerformanceWriter.Config()
-    cfg.inputTracks = "fitted_tracks"
-    cfg.inputParticles = "particles"
-    cfg.inputTrackParticleMatching = "track_particle_matching"
-    cfg.inputParticleTrackMatching = "particle_track_matching"
-    cfg.inputParticleMeasurementsMap = "particle_measurements_map"
-    perfWriter = acts.examples.PythonTrackFinderPerformanceWriter(
-        # cfg, acts.logging.INFO
-        cfg,
+    # Add track finder performance writer
+    cfg_finder = acts.examples.PythonPatternRecognitionPerformanceWriter.Config()
+    cfg_finder.inputTracks = "fitted_tracks"
+    cfg_finder.inputParticles = "particles"
+    cfg_finder.inputTrackParticleMatching = "track_particle_matching"
+    cfg_finder.inputParticleTrackMatching = "particle_track_matching"
+    cfg_finder.inputParticleMeasurementsMap = "particle_measurements_map"
+    cfg_finder.subDetectorTrackSummaryVolumes = {
+        "pixel": {7, 8, 9},
+        "sstrip": {12, 13, 14},
+        "lstrip": {16, 17, 18},
+    }
+    perfWriterFinder = acts.examples.PythonPatternRecognitionPerformanceWriter(
+        # cfg_finder, acts.logging.INFO
+        cfg_finder,
         acts.logging.VERBOSE,
     )
     s.addWriter(perfWriterFinder)
+    #! [Python pattern-recognition performance writer]
 
     # Add track fitter performance writer
     import acts.examples.scipy as acts_scipy

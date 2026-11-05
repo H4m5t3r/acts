@@ -8,6 +8,9 @@
 
 #pragma once
 
+// Project include(s)
+#include "detray/algebra/concepts.hpp"
+
 // Actsvg include(s)
 #include "actsvg/core.hpp"
 
@@ -21,8 +24,11 @@ namespace detray::svgtools::meta::proto {
 /// description of a point.
 template <concepts::point3D point3_t>
 struct trajectory {
+  /// Ordered global positions forming the trajectory polyline.
   std::vector<point3_t> _points;
+  /// Identifier used for the trajectory display object.
   std::string _name;
+  /// Stroke style used to draw the trajectory.
   actsvg::style::stroke _stroke = actsvg::style::stroke();
 };
 }  // namespace detray::svgtools::meta::proto

@@ -37,10 +37,40 @@ rules:
      - "main"
      - "develop/*"
     paths:
-     # Both spellings: the glob engine here is undocumented, so which one is
-     # recursive cannot be assumed.
+     # Keep in sync with .github/detray-traccc-filters.yml and the workflow.
+     # Include direct and nested files for the sentinel glob matcher.
      - "Detray/*"
      - "Detray/**/*"
      - ".github/workflows/detray.yml"
+     - ".github/actions/dependencies/*"
+     - ".github/actions/dependencies/**/*"
+     - ".github/actions/ccache-s3/*"
+     - ".github/actions/ccache-s3/**/*"
+     - "CI/ccache_snapshot.py*"
+     - "CI/ccache_stats.sh"
+     - ".github/detray-traccc-filters.yml"
     required_pattern:
      - "Detray / *"
+
+  # Require Traccc for all inputs that trigger it, including Detray changes,
+  # so the gate waits for these jobs before allowing a merge.
+  - branch_filter:
+     - "main"
+     - "develop/*"
+    paths:
+     # Keep in sync with .github/detray-traccc-filters.yml and the workflow.
+     # Include direct and nested files for the sentinel glob matcher.
+     - "Traccc/*"
+     - "Traccc/**/*"
+     - "Detray/*"
+     - "Detray/**/*"
+     - ".github/workflows/traccc.yml"
+     - ".github/actions/dependencies/*"
+     - ".github/actions/dependencies/**/*"
+     - ".github/actions/ccache-s3/*"
+     - ".github/actions/ccache-s3/**/*"
+     - "CI/ccache_snapshot.py*"
+     - "CI/ccache_stats.sh"
+     - ".github/detray-traccc-filters.yml"
+    required_pattern:
+     - "Traccc / *"

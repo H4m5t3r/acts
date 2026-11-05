@@ -10,6 +10,7 @@
 
 // Project include(s)
 #include "detray/builders/detail/radius_getter.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/geometry/surface.hpp"
 #include "detray/utils/grid/concepts.hpp"
 
@@ -35,7 +36,7 @@ namespace detray::svgtools::conversion {
 /// @param style the style settings
 ///
 /// @returns a proto grid
-template <typename detector_t, typename view_t>
+template <concepts::detector detector_t, typename view_t>
 auto material_grid(const detector_t& detector, const dindex index,
                    const view_t& view,
                    const styling::grid_style& style =
@@ -62,6 +63,13 @@ auto material_grid(const detector_t& detector, const dindex index,
 
 /// @brief A functor to fill the material proto grid with proto material slabs
 struct material_converter {
+  /// Convert one material-map entry to the proto material grid matrix.
+  /// @tparam mat_coll_t Material collection type.
+  /// @tparam index_t Entry index type.
+  /// @tparam transform3_t Transform type used by the visitor interface.
+  /// @param mat_coll Collection containing material maps.
+  /// @param index Selected material entry.
+  /// @return Material slab matrix for SVG rendering.
   template <typename mat_coll_t, typename index_t,
             concepts::transform3D transform3_t>
   DETRAY_HOST inline auto operator()(const mat_coll_t& mat_coll,
@@ -134,10 +142,12 @@ struct material_converter {
 /// @brief Calculate the proto surface material of a surface.
 ///
 /// @param d_surface The detray surface.
-/// @param context The geometry context.
+/// @param detector Detector owning the surface and material stores.
+/// @param view Projection used to convert material grids.
+/// @param style Styling applied to the material representation.
 ///
 /// @returns An actsvg proto surface material the material map.
-template <typename detector_t, typename view_t>
+template <concepts::detector detector_t, typename view_t>
 auto surface_material(const detector_t& detector,
                       const detray::geometry::surface<detector_t>& d_surface,
                       const view_t& view,

@@ -18,6 +18,7 @@
 #include <vecmem/containers/vector.hpp>
 
 // System include(s)
+#include <array>
 #include <map>
 #include <type_traits>
 #include <vector>
@@ -25,43 +26,62 @@
 namespace detray {
 
 template <typename value_t, std::size_t kDIM>
+/// Fixed-size array container.
 using darray = std::array<value_t, kDIM>;
 
 template <typename value_t>
+/// Vector container backed by vecmem.
 using dvector = vecmem::vector<value_t>;
 
 template <typename value_t>
+/// Jagged vector container backed by vecmem.
 using djagged_vector = vecmem::jagged_vector<value_t>;
 
 template <typename key_t, typename value_t>
+/// Ordered key-value map container.
 using dmap = std::map<key_t, value_t>;
 
 template <class... types>
+/// Tuple type used by detray storage and dispatch.
 using dtuple = detray::tuple<types...>;
 
 /// @brief Bundle container type definitions
-template <template <typename...> class vector_t = dvector,
-          template <typename...> class jagged_vector_t = djagged_vector,
-          template <typename, typename> class map_t = dmap>
+template <template <typename...> class vector_t = dvector>
 struct container_types {
   template <typename T>
+  /// Vector template selected for this container policy.
   using vector_type = vector_t<T>;
 
   template <class... T>
+  /// Tuple template used to combine component types.
   using tuple_type = dtuple<T...>;
 
   template <typename T, std::size_t kDIM>
+  /// Fixed-size array template used for inline collections.
   using array_type = darray<T, kDIM>;
+};
 
+/// @brief Bundle container type definitions
+template <template <typename...> class vector_t = dvector>
+struct const_container_types {
   template <typename T>
-  using jagged_vector_type = jagged_vector_t<T>;
+  /// Vector template selected for this container policy.
+  using vector_type = vector_t<std::add_const_t<T>>;
 
-  template <typename K, typename T>
-  using map_type = map_t<K, T>;
+  template <class... T>
+  /// Tuple template used to combine component types.
+  using tuple_type = dtuple<std::add_const_t<T>...>;
+
+  template <typename T, std::size_t kDIM>
+  /// Fixed-size array template used for inline collections.
+  using array_type = darray<std::add_const_t<T>, kDIM>;
 };
 
 /// Defining some common types
+/// Default host container policy based on vecmem vectors.
 using host_container_types = container_types<>;
+/// Const-qualified host container policy based on vecmem vectors.
+using const_host_container_types = const_container_types<>;
 
 namespace detail {
 

@@ -12,6 +12,7 @@
 #include "detray/builders/detector_builder.hpp"
 #include "detray/builders/surface_factory.hpp"
 #include "detray/builders/volume_builder.hpp"
+#include "detray/core/concepts.hpp"
 #include "detray/definitions/indexing.hpp"
 #include "detray/io/backend/detail/basic_converter.hpp"
 #include "detray/io/backend/detail/type_info.hpp"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <cassert>
 #include <map>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -54,7 +56,10 @@ class geometry_reader {
   /// Payload type that the reader processes
   using payload_type = detector_payload;
 
-  /// Convert a detector @param det from its io payload @param det_data
+  /// Populate the detector builder from a serialized geometry payload.
+  /// @tparam detector_t Detector type being constructed.
+  /// @param det_builder Builder receiving volumes, surfaces, and links.
+  /// @param det_data Geometry payload to decode.
   template <class detector_t>
   static void from_payload(detector_builder<typename detector_t::metadata,
                                             volume_builder>& det_builder,
@@ -183,8 +188,10 @@ class geometry_reader {
     return dtransform3D<algebra_t>{t, x, y, z};
   }
 
+  /// Build surface-factory data from a serialized surface entry.
+  /// @tparam detector_t Detector type being constructed.
+  /// @param sf_data Serialized surface data, including masks and transform.
   /// @returns surface data for a surface factory from a surface io payload
-  /// @param trf_data
   template <class detector_t>
   static surface_data<detector_t> from_payload(const surface_payload& sf_data) {
     using nav_link_t = typename detector_t::surface_type::navigation_link;
@@ -243,7 +250,8 @@ class geometry_reader {
   /// payload
   ///
   /// @return the corresponding surface factory.
-  template <typename shape_registry_t, typename detector_t, std::size_t I = 0u>
+  template <typename shape_registry_t, concepts::detector detector_t,
+            std::size_t I = 0u>
   static std::shared_ptr<surface_factory_interface<detector_t>> init_factory(
       const io_shape_id shape_id) {
     // Get the next mask shape type

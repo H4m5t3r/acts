@@ -13,6 +13,7 @@
 #include "Acts/Seeding/detail/GbtsFilterTypes.hpp"
 #include "Acts/Utilities/Logger.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -37,6 +38,10 @@ class GbtsTrackingFilter final {
     /// Measurement uncertainty in y direction.
     float sigmaY = 0.25 * Acts::UnitConstants::mm;
 
+    /// Across the strips only. The along-strip resolution is not configured:
+    /// it is derived per node from the node's own strip. See `update`.
+    float sigmaXStrip = 0.03 * Acts::UnitConstants::mm;
+
     /// Measurement weight in x direction.
     float weightX = 0.5;
     /// Measurement weight in y direction.
@@ -54,6 +59,11 @@ class GbtsTrackingFilter final {
     float maxCurvature = 1e-3f / Acts::UnitConstants::mm;
     /// Maximum longitudinal impact parameter.
     float maxZ0 = 170.0 * Acts::UnitConstants::mm;
+
+    /// Initial variance of the transverse state (y, dy/dx, d2y/dx2).
+    std::array<float, 3> initialVarianceX = {0.25f, 0.001f, 0.001f};
+    /// Initial variance of the longitudinal state (z, dz/dr).
+    std::array<float, 2> initialVarianceY = {1.5f, 0.001f};
   };
 
   /// @param config Configuration for seed finder
@@ -68,19 +78,6 @@ class GbtsTrackingFilter final {
   // Only the seeder walks the edge graph.
   friend class GraphBasedTrackSeeder;
 
-  using State = detail::GbtsFilterState;
-
-  /// Follow track starting from edge
-  /// @param state Tracking filter state
-  /// @param nodeView View of the node positions and layers
-  /// @param sb Edge storage
-  /// @param pS Starting edge
-  /// @return Final edge state after following the track
-  detail::GbtsEdgeState followTrack(State& state,
-                                    const detail::GbtsNodeView& nodeView,
-                                    std::vector<detail::GbtsEdge>& sb,
-                                    detail::GbtsEdge& pS) const;
-
   /// Configuration for the tracking filter.
   Config m_cfg{};
 
@@ -94,16 +91,6 @@ class GbtsTrackingFilter final {
   /// @return Logger reference
   const Logger& logger() const { return *m_logger; }
 
-  /// Propagate edge state
-  /// @param state Tracking filter state
-  /// @param nodeView View of the node positions and layers
-  /// @param sb Edge storage
-  /// @param pS Edge to propagate from
-  /// @param ts Edge state to update
-  void propagate(State& state, const detail::GbtsNodeView& nodeView,
-                 std::vector<detail::GbtsEdge>& sb, detail::GbtsEdge& pS,
-                 detail::GbtsEdgeState& ts) const;
-
   /// Update edge state with edge
   /// @param nodeView View of the node positions and layers
   /// @param pS Edge to update with
@@ -115,7 +102,7 @@ class GbtsTrackingFilter final {
   /// Get layer type from layer index
   /// @param layerIndex Layer index
   /// @return Layer type
-  GbtsLayerType getLayerType(std::uint32_t layerIndex) const;
+  GbtsLayerType getLayerType(GbtsLayerIndex layerIndex) const;
 };
 
 }  // namespace Acts::Experimental

@@ -204,8 +204,8 @@ def main():
     parser.add_argument(
         "--cxx",
         type=str,
-        default=os.environ.get("CXXSTD", "20"),
-        help="C++ standard (e.g. 20, 23). Defaults to CXXSTD env var or 20.",
+        default=os.environ.get("CXXSTD", "23"),
+        help="C++ standard (e.g. 20, 23). Defaults to CXXSTD env var or 23.",
     )
     parser.add_argument(
         "--flavor",
@@ -345,7 +345,7 @@ def select_lockfile(
     lockfiles: Dict[str, Dict[str, Tuple[str, str]]],
     arch: str,
     compiler: Optional[str],
-    cxx: str = "cxx20",
+    cxx: str = "cxx23",
     flavor: Optional[str] = None,
 ) -> str:
     # Filter first, so every rule below (family, version, cxx) stays inside one
@@ -466,9 +466,11 @@ def select_lockfile(
         _, lockfile = compiler_matches[compiler]
         return lockfile
 
-    # Fallback: first available. The normal path for the flavors, published at
-    # cxx23 only, so a cxx20 job asking for `cuda13` gets the cxx23 stack --
-    # deliberate; see the `flavor` input in .github/actions/dependencies.
+    # Fallback: first available. Reached when the requested standard has no
+    # lockfile for this compiler -- e.g. a cxx20 job asking for a flavor, which
+    # v24.5.0 publishes at cxx23 only, and so lands on the C++23 stack. The cxx23
+    # flavored jobs are an exact match and never get here. See the `flavor`
+    # input in .github/actions/dependencies.
     first_comp, (_, lockfile) = next(iter(compiler_matches.items()))
     print(
         f"No lockfile found for compiler '{compiler}' with {cxx} "
