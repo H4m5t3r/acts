@@ -147,6 +147,7 @@ def runTruthTrackingGsf(
         addParticleGun(
             s,
             ParticleConfig(num=1, pdg=acts.PdgParticle.eElectron, randomizeCharge=True),
+            # ParticleConfig(num=1, pdg=acts.PdgParticle.eMuon, randomizeCharge=True),
             EtaConfig(-3.0, 3.0, uniform=True),
             MomentumConfig(1.0 * u.GeV, 100.0 * u.GeV, transverse=True),
             PhiConfig(0.0, 360.0 * u.degree),
@@ -342,6 +343,8 @@ if "__main__" == __name__:
     # )
 
     field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+    # ColliderML
+    # field = acts.ConstantBField(acts.Vector3(0, 0, 3 * u.T))
 
     print(OUTPUT_DIR)
 
