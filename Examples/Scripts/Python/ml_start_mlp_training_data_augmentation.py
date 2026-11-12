@@ -47,11 +47,15 @@ parser.add_argument("--seed", type=int, default=None)
 # costs roughly 0.4-0.8 GB of RAM. Default: the CPUs allocated to the job minus
 # one, at most ml_trainer.MAX_DEFAULT_NUM_WORKERS.
 parser.add_argument("--num_workers", type=int, default=None)
+# Particle type of the dataset, used to find the data directories
+parser.add_argument(
+    "--particle", type=str, default="electron", choices=["electron", "muon"]
+)
 args = parser.parse_args()
 
 MODEL_TYPE = "MLP"
 # NOTE: USERS: Set these variables:
-PARTICLE = "electron"
+PARTICLE = args.particle
 SIMULATION = "geant4"
 LEARNING_RATE = args.lr
 # DATA_READING_BATCH_SIZE = args.data_reading_batch_size
@@ -87,16 +91,16 @@ MEGA_ML_TEST_DATA_DIR = os.path.join(
     ACTS_DIR, "ml_data/mega_data_test/{}/{}/test".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR = os.path.join(
-    ACTS_DIR, "ml_data/mega_data_38/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_38/{}/{}/train_100000".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR2 = os.path.join(
-    ACTS_DIR, "ml_data/mega_data_49/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_49/{}/{}/train_100000".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR3 = os.path.join(
-    ACTS_DIR, "ml_data/mega_data_96/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_96/{}/{}/train_100000".format(PARTICLE, SIMULATION)
 )
 EXTRA_DATA_DIR4 = os.path.join(
-    ACTS_DIR, "ml_data/mega_data_97/electron/geant4/train_100000"
+    ACTS_DIR, "ml_data/mega_data_97/{}/{}/train_100000".format(PARTICLE, SIMULATION)
 )
 CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
     N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE
@@ -107,14 +111,13 @@ DATA_PREFIX = "mini" if MINI_DATA else "mega"
 WANDB_PROJECT_NAME = "Mini MLP SHIPPING" if MINI_DATA else "Mega MLP SHIPPING"
 # One directory per model configuration, with one subdirectory per run (seed)
 # holding that run's model and figures:
-# runs/<mini|mega>_mlp<config>/seed_<seed>/
-CONFIG_NAME = DATA_PREFIX + "_mlp" + CONFIG_FILE_NAME_EXTENSION
+# runs/<mini|mega>_<particle>_mlp<config>/seed_<seed>/
+MODEL_PREFIX = DATA_PREFIX + "_" + PARTICLE + "_mlp"
+CONFIG_NAME = MODEL_PREFIX + CONFIG_FILE_NAME_EXTENSION
 CONFIG_DIR = os.path.join(RUN_DIR, CONFIG_NAME)
 RUN_NAME = "seed_{}".format(SEED)
 FIGURES_DIR = os.path.join(CONFIG_DIR, RUN_NAME)
-MODEL_SAVE_PATH = os.path.join(
-    FIGURES_DIR, DATA_PREFIX + "_mlp" + MODEL_FILE_NAME_ENDING
-)
+MODEL_SAVE_PATH = os.path.join(FIGURES_DIR, MODEL_PREFIX + MODEL_FILE_NAME_ENDING)
 # 'spawn' DataLoader workers re-run this module with their own (unused) random
 # SEED, so only the main process prints the run's model path
 if __name__ == "__main__":
@@ -122,9 +125,12 @@ if __name__ == "__main__":
 # Shared between runs on the same dataset, since fitting the augmented output
 # scaler requires propagating the training tracks. The output scaler is kept
 # separate from the non-augmented one, as d0 is much wider with augmentation.
-INPUT_SCALER_PATH = os.path.join(RUN_DIR, DATA_PREFIX + "_input_scaler.joblib")
+# The electron scalers keep their original names (no particle tag) so that
+# existing scaler files are still found; other particles get their own tag.
+SCALER_PREFIX = DATA_PREFIX if PARTICLE == "electron" else DATA_PREFIX + "_" + PARTICLE
+INPUT_SCALER_PATH = os.path.join(RUN_DIR, SCALER_PREFIX + "_input_scaler.joblib")
 OUTPUT_SCALER_PATH = os.path.join(
-    RUN_DIR, DATA_PREFIX + "_output_scaler_augmented.joblib"
+    RUN_DIR, SCALER_PREFIX + "_output_scaler_augmented.joblib"
 )
 # Number of tracks per training directory propagated for the output scaler fit
 AUGMENTED_SCALER_TRACKS_PER_DIR = 20000
@@ -325,8 +331,8 @@ if __name__ == "__main__":
     debug_dirs = [
         os.path.join(ACTS_DIR, dir)
         for dir in [
-            "debug_data/debug_data_0/electron/geant4/train_200",
-            "debug_data/debug_data_2/electron/geant4/train_200",
+            "debug_data/debug_data_0/{}/{}/train_200".format(PARTICLE, SIMULATION),
+            "debug_data/debug_data_2/{}/{}/train_200".format(PARTICLE, SIMULATION),
         ]
     ]
     ten_thousant_dir = "/home/taleiko/Documents/CERN/Technical_Student/Program/acts/ml_output/electron/geant4/train"
