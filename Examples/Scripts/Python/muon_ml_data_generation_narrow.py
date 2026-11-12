@@ -340,7 +340,8 @@ if "__main__" == __name__:
     from acts.examples.odd import getOpenDataDetector
     from acts.examples.visualization import PyVisualization2D
 
-    detector = getOpenDataDetector(gen3=True)
+    # detector = getOpenDataDetector(gen3=True)
+    detector = getOpenDataDetector()
     trackingGeometry = detector.trackingGeometry()
     decorators = detector.contextDecorators()
     # digiConfigFile = srcdir / "Examples/Configs/odd-digi-smearing-config-gen3.json"
