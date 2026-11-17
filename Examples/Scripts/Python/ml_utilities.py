@@ -359,6 +359,9 @@ class DataHandler:
 
         # tracksummary_path = os.path.join(data_dir, "tracksummary.root")
         tracksummary_path = os.path.join(data_dir, "tracksummary_gsf.root")
+        # TEMPORARY: fall back to the Kalman fitter output if no GSF file exists
+        if not os.path.exists(tracksummary_path):
+            tracksummary_path = os.path.join(data_dir, "tracksummary_kf.root")
         tracksummary_tree = self.readRootTree(tracksummary_path, "tracksummary")
         track_event_ids, valid, arrays, fields = self._readTrackValidity(
             tracksummary_tree

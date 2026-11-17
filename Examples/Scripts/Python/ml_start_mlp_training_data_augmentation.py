@@ -81,7 +81,7 @@ MINI_ML_TRAIN_DATA_DIRS = [
 MEGA_ML_TRAIN_DATA_DIRS = [
     os.path.join(
         ACTS_DIR,
-        "ml_data/mega_data_{}/{}/{}/train_100000".format(
+        "ml_data/mega_data_{}/{}/{}/narrow/0.0_0.0_0.0/train_100000".format(
             str(num), PARTICLE, SIMULATION
         ),
     )
@@ -108,7 +108,9 @@ CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
 MODEL_FILE_NAME_ENDING = CONFIG_FILE_NAME_EXTENSION + ".pt"
 
 DATA_PREFIX = "mini" if MINI_DATA else "mega"
-WANDB_PROJECT_NAME = "Mini MLP SHIPPING" if MINI_DATA else "Mega MLP SHIPPING"
+WANDB_PROJECT_NAME = (
+    "Mini Data augmentation MLP" if MINI_DATA else "Mega Data augmentation MLP"
+)
 # One directory per model configuration, with one subdirectory per run (seed)
 # holding that run's model and figures:
 # runs/<mini|mega>_<particle>_mlp<config>/seed_<seed>/

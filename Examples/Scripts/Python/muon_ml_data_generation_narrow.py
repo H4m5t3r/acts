@@ -34,7 +34,7 @@ parser.add_argument(
 parser.add_argument(
     "--output_dir",
     type=Path,
-    default=Path.cwd() / "ml_output",
+    default=Path.cwd() / "ml_data",
     help="Set a custom output directory",
 )
 parser.add_argument(
@@ -220,6 +220,8 @@ def runTruthTrackingKalman(
         digiConfigFile=digiConfigFile,
         rnd=rnd,
         logLevel=acts.logging.DEBUG,
+        # outputDirCsv=outputDir / "csv",
+        outputDirRoot=outputDir / "root",
     )
 
     addDigiParticleSelection(
