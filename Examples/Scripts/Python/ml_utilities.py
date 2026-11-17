@@ -289,11 +289,10 @@ class DataHandler:
         "rec_loc0",
         "rec_loc1",
     ]
-
-    # Largest fraction of events per directory with unconvertible hits that is
-    # removed with a warning; above it an error is raised, see
-    # _unconvertibleHitEventIds()
-    max_unconvertible_event_fraction = 0.01
+    # Branches of clusters.root used to read ACTS' own global hit positions
+    # and to check that its rows line up with measurements.root
+    cluster_id_branches = ["event_nr", "volume_id", "layer_id", "surface_id"]
+    cluster_position_branches = ["clus_gx", "clus_gy", "clus_gz"]
 
     def clearCache(self):
         """Drops the per-directory event selections and track values cached by
@@ -354,7 +353,6 @@ class DataHandler:
         non_outlier_ids = self._nonOutlierEventIds(meas_event_ids)
         n_outlier_filtered = int(np.sum(~np.isin(meas_event_ids, non_outlier_ids)))
         print("Number of sequence length outliers in data fits:", n_outlier_filtered)
-        bad_hit_ids = self._unconvertibleHitEventIds(meas, data_dir)
         del meas
 
         # tracksummary_path = os.path.join(data_dir, "tracksummary.root")
@@ -367,10 +365,8 @@ class DataHandler:
             tracksummary_tree
         )
         successful_ids = track_event_ids[valid]
-        track_mask = (
-            np.isin(track_event_ids, non_outlier_ids)
-            & np.isin(track_event_ids, successful_ids)
-            & ~np.isin(track_event_ids, bad_hit_ids)
+        track_mask = np.isin(track_event_ids, non_outlier_ids) & np.isin(
+            track_event_ids, successful_ids
         )
         track_values = {"event_nr": track_event_ids[track_mask]}
         for field in fields:
@@ -379,7 +375,6 @@ class DataHandler:
         selection = {
             "non_outlier_ids": non_outlier_ids,
             "successful_ids": successful_ids,
-            "bad_hit_ids": bad_hit_ids,
             "tracksummary_path": tracksummary_path,
             "track_mask": track_mask,
             "track_values": track_values,
@@ -387,61 +382,33 @@ class DataHandler:
         self._selection_cache[key] = selection
         return selection
 
-    def _unconvertibleHitEventIds(self, meas, data_dir):
-        """Event ids with at least one hit whose global position can't be
-        computed (surface missing from the geometry JSON or non-finite local
-        coordinates). A single NaN input row makes the training loss NaN, so
-        these events are left out of both X and y. If more than
-        max_unconvertible_event_fraction of the events are affected, the data
-        and the reading don't fit together (e.g. 1D strip measurements or a
-        geometry JSON from another geometry) and an error is raised instead."""
-        global_coords = sg.localToGlobalFromArrays(
-            meas["volume_id"],
-            meas["layer_id"],
-            meas["surface_id"],
-            meas["rec_loc0"],
-            meas["rec_loc1"],
+    def _clusterGlobalCoords(self, data_dir, meas):
+        """Global hit positions computed by ACTS during digitization
+        (Cluster::globalPosition, written to clusters.root as clus_gx/gy/gz).
+        Measured local coordinates are used and an unmeasured one (e.g. loc1 of
+        a 1D strip) is set to the sensor centre, so 1D and 2D measurements both
+        get a finite position. ACTS creates each cluster together with its
+        measurement, so the rows of clusters.root and measurements.root line
+        up; this is checked against the given (unmasked) measurement arrays."""
+        clusters_tree = self.readRootTree(
+            os.path.join(data_dir, "root/clusters.root"), "clusters"
         )
-        bad_hits = ~np.isfinite(global_coords).all(axis=1)
-        bad_hit_ids = np.unique(meas["event_nr"][bad_hits])
-        if len(bad_hit_ids) == 0:
-            return bad_hit_ids
-        n_events = len(np.unique(meas["event_nr"]))
-        fraction = len(bad_hit_ids) / n_events
-        # Separate the two causes, they need different fixes
-        nonfinite_loc = ~(np.isfinite(meas["rec_loc0"]) & np.isfinite(meas["rec_loc1"]))
-        n_nonfinite_loc = int((bad_hits & nonfinite_loc).sum())
-        n_missing_surface = int((bad_hits & ~nonfinite_loc).sum())
-        causes = []
-        hints = []
-        if n_nonfinite_loc:
-            volumes = np.unique(meas["volume_id"][bad_hits & nonfinite_loc])
-            causes.append(
-                f"{n_nonfinite_loc} hits with NaN/inf rec_loc0/rec_loc1 in volumes "
-                f"{volumes.tolist()}"
-            )
-            hints.append(
-                "NaN local coordinates usually mean 1D measurements: the "
-                "digitization config doesn't smear loc1 for these volumes"
-            )
-        if n_missing_surface:
-            causes.append(
-                f"{n_missing_surface} hits on surfaces missing from the geometry "
-                f"JSON in {sg.JSON_DATA_DIR}"
-            )
-            hints.append(
-                "check that the geometry JSON was written for the same detector "
-                "geometry and ACTS version as the data"
-            )
-        message = (
-            f"{data_dir}: {len(bad_hit_ids)} of {n_events} events ({fraction:.2%}) "
-            f"have hits without a finite global position: " + "; ".join(causes)
+        clus = clusters_tree.arrays(
+            self.cluster_id_branches + self.cluster_position_branches, library="np"
         )
-        if fraction > self.max_unconvertible_event_fraction:
-            hint = "; ".join(hints)
-            raise ValueError(f"{message}. {hint[0].upper()}{hint[1:]}.")
-        print(f"WARNING: {message}. These events are removed.")
-        return bad_hit_ids
+        n_meas, n_clus = len(meas["event_nr"]), len(clus["event_nr"])
+        if n_meas != n_clus:
+            raise ValueError(
+                f"{data_dir}: clusters.root has {n_clus} rows but measurements.root "
+                f"has {n_meas}, the global positions can't be matched to the hits"
+            )
+        for branch in self.cluster_id_branches:
+            if not np.array_equal(clus[branch], meas[branch]):
+                raise ValueError(
+                    f"{data_dir}: '{branch}' differs between clusters.root and "
+                    f"measurements.root, the rows aren't in the same order"
+                )
+        return np.column_stack([clus[b] for b in self.cluster_position_branches])
 
     def _trackValues(self, data_dir, branches):
         """Returns the selected tracks' values of the given tracksummary branches
@@ -487,19 +454,20 @@ class DataHandler:
         measurements_tree = self.readRootTree(file_path, "measurements")
         meas = measurements_tree.arrays(self.measurement_branches, library="np")
         event_ids = meas["event_nr"]
-        mask = (
-            np.isin(event_ids, selection["non_outlier_ids"])
-            & np.isin(event_ids, selection["successful_ids"])
-            & ~np.isin(event_ids, selection["bad_hit_ids"])
+        mask = np.isin(event_ids, selection["non_outlier_ids"]) & np.isin(
+            event_ids, selection["successful_ids"]
         )
+        # ACTS' own local-to-global conversion (also handles 1D measurements)
+        global_coords = self._clusterGlobalCoords(data_dir, meas)[mask]
         meas = {branch: values[mask] for branch, values in meas.items()}
-        global_coords = sg.localToGlobalFromArrays(
-            meas["volume_id"],
-            meas["layer_id"],
-            meas["surface_id"],
-            meas["rec_loc0"],
-            meas["rec_loc1"],
-        )
+        # Previous conversion with the geometry JSON (2D measurements only):
+        # global_coords = sg.localToGlobalFromArrays(
+        #     meas["volume_id"],
+        #     meas["layer_id"],
+        #     meas["surface_id"],
+        #     meas["rec_loc0"],
+        #     meas["rec_loc1"],
+        # )
         measurements_df = pd.DataFrame(
             {
                 # NOTE: Changing the event nr column name for consistency
