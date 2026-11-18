@@ -49,7 +49,7 @@ parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--num_workers", type=int, default=None)
 # Particle type of the dataset, used to find the data directories
 parser.add_argument(
-    "--particle", type=str, default="electron", choices=["electron", "muon"]
+    "--particle", type=str, default="muon", choices=["electron", "muon"]
 )
 args = parser.parse_args()
 
@@ -296,6 +296,15 @@ def trainMlpModel(
 
     ev.plotDistributions(
         test_data_dir, model, is_transformer=False, distr_base_path=DISTR_FIG_BASE_PATH
+    )
+    # Truth parameters after the same beamspot augmentation as in training,
+    # for one of the training directories
+    ev.plotAugmentedTruthDistributions(
+        train_data_dirs[0],
+        DISTR_FIG_BASE_PATH,
+        semi_axes=NOISE,
+        max_tracks=AUGMENTED_SCALER_TRACKS_PER_DIR,
+        seed=SEED,
     )
     # ev.correlationPlots(test_data_dir, model, is_transformer=False)
 

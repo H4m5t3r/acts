@@ -779,6 +779,127 @@ class Evaluator:
         plt.savefig(distr_base_path + "_truth_distr.png")
         plt.show()
 
+    def plotAugmentedTruthDistributions(
+        self, data_dir, distr_base_path, semi_axes, max_tracks=None, seed=0
+    ):
+        """Histograms of the truth perigee parameters after the same beamspot
+        augmentation used in training (ArbitraryBeamspotTrainer): one beamspot
+        per particle sampled uniformly in the cylinder with the given semi-axes
+        (e.g. ml_trainer.NOISE) and the particle propagated to the perigee at
+        it. The original truth parameters w.r.t. the origin are overlaid for
+        comparison. max_tracks limits the number of (slow) propagations; None
+        uses all tracks in data_dir. seed fixes the track subset and the
+        beamspots without changing the global numpy generator's state."""
+        print("Plotting augmented truth distributions for", data_dir)
+        particle_truth = self.data_handler.readParticleTruth([data_dir])
+        # Rows line up with readParticleTruth() (same filtering)
+        original = self.data_handler.createPOCAParameterDf(data_dir)[
+            self.poca_columns
+        ].to_numpy()
+        rng = np.random.default_rng(seed)
+        if max_tracks is not None and len(particle_truth) > max_tracks:
+            subset = rng.choice(len(particle_truth), max_tracks, replace=False)
+            particle_truth = particle_truth[subset]
+            original = original[subset]
+        rng_state = np.random.get_state()
+        np.random.seed(rng.integers(2**32))
+        beamspots = sampleUniformPointsIn3D(*semi_axes, len(particle_truth))
+        np.random.set_state(rng_state)
+        augmented = trackParameterAndBeamspotPropagation(beamspots, particle_truth)
+        print("Propagated {} tracks".format(len(augmented)))
+        axes_info = (
+            "beamspot semi-axes (x, y, z) = ({:g}, {:g}, {:g}) mm, {} tracks".format(
+                *semi_axes, len(augmented)
+            )
+        )
+        ensureParentDir(distr_base_path)
+
+        # Separate figures, each binned over its own range so the narrow
+        # non-augmented d0 isn't squeezed into the augmented range
+        separate_figures = [
+            (
+                original,
+                "darkorange",
+                "Non-augmented truth distributions, beamspot (0, 0, 0), {} tracks".format(
+                    len(original)
+                ),
+                "_non_augmented_truth_distr.png",
+            ),
+            (
+                augmented,
+                "skyblue",
+                "Augmented truth distributions, " + axes_info,
+                "_augmented_only_truth_distr.png",
+            ),
+        ]
+        for values, color, title, file_ending in separate_figures:
+            fig, axes = self._parameterGridFigure()
+            for i, ax in enumerate(axes):
+                n_bins = 250 if i == 4 else 100
+                ax.hist(
+                    values[:, i],
+                    bins=n_bins,
+                    color=color,
+                    edgecolor="black",
+                    linewidth=0.3,
+                )
+                ax.set_title(self.titles[i])
+                ax.set_xlabel(self.labels[i])
+                ax.set_ylabel("Frequency")
+                ax.grid(True)
+            fig.suptitle(title)
+            fig.tight_layout()
+            fig.savefig(distr_base_path + file_ending)
+            plt.show()
+
+        # Combined figure with the non-augmented values overlaid
+        fig, axes = self._parameterGridFigure()
+        for i, ax in enumerate(axes):
+            n_bins = 250 if i == 4 else 100
+            # Shared bin edges so the two histograms are directly comparable
+            edges = np.histogram_bin_edges(
+                np.concatenate([augmented[:, i], original[:, i]]), bins=n_bins
+            )
+            ax.hist(
+                augmented[:, i],
+                bins=edges,
+                color="skyblue",
+                edgecolor="black",
+                linewidth=0.3,
+                label="Augmented",
+            )
+            ax.hist(
+                original[:, i],
+                bins=edges,
+                histtype="step",
+                color="darkorange",
+                linewidth=1.2,
+                label="Beamspot (0, 0, 0)",
+            )
+            ax.set_title(self.titles[i])
+            ax.set_xlabel(self.labels[i])
+            ax.set_ylabel("Frequency")
+            ax.grid(True)
+        axes[0].legend(fontsize="small")
+        fig.suptitle("Augmented truth distributions, " + axes_info)
+        fig.tight_layout()
+        fig.savefig(distr_base_path + "_augmented_truth_distr.png")
+        plt.show()
+        return augmented, beamspots
+
+    def _parameterGridFigure(self):
+        """Figure with the five track parameter axes in a 3 + 2 layout."""
+        fig = plt.figure(figsize=(12, 7))
+        gs = GridSpec(2, 6, figure=fig)
+        axes = [
+            fig.add_subplot(gs[0, 0:2]),
+            fig.add_subplot(gs[0, 2:4]),
+            fig.add_subplot(gs[0, 4:6]),
+            fig.add_subplot(gs[1, 1:3]),
+            fig.add_subplot(gs[1, 3:5]),
+        ]
+        return fig, axes
+
     def plotGsfDistributions(self, data_dir, distr_base_path):
         filter_df = self.data_handler.createFilterTrackSummaryDf(data_dir)
         # fig, axes = plt.subplots(nrows=1, ncols=5, figsize=(5 * 5, 4))
