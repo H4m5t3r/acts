@@ -31,7 +31,10 @@ def ensureParentDir(file_path):
 # every call.
 _geo_context = acts.GeometryContext.dangerouslyDefaultConstruct()
 _mag_field_context = acts.MagneticFieldContext()
-_field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+# Electron simulations 2025
+# _field = acts.ConstantBField(acts.Vector3(0, 0, 2 * u.T))
+# Muon simulations for data augmentation and comparison with ColliderML November 2026
+_field = acts.ConstantBField(acts.Vector3(0, 0, 3 * u.T))
 _propagator = acts.EigenVoidPropagator(acts.EigenStepper(_field), acts.VoidNavigator())
 _propagator_options = acts.PropagatorPlainOptions(_geo_context, _mag_field_context)
 # The particle hypothesis only affects the mass, which does not enter the

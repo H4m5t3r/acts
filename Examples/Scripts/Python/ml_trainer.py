@@ -27,9 +27,16 @@ N_POINTS_IN_XY = 40
 DISTRIBUTION_RADIUS = 25
 
 # 3D beamspots
-X_OFFSET = 1.0
-Y_OFFSET = 1.0
-Z_OFFSET = 10.0
+# ATLAS beamspot variation
+# Source: https://twiki.cern.ch/twiki/bin/view/AtlasPublic/BeamSpotPublicResults
+# X_OFFSET = 1.0
+# Y_OFFSET = 1.0
+# Z_OFFSET = 10.0
+# Adaptation to uniform ColliderML dataset for the x, y plane
+# Source: https://portal.nersc.gov/cfs/m4958/ColliderML/drift_beamspot/single_muon_100GeV/
+X_OFFSET = 9.0  # Uniform ColliderML max d0: 7.07, narrow Gaussian 99.99999% CI: [-0.0799, 0.0799], for radius 0.0852
+Y_OFFSET = 9.0
+Z_OFFSET = 0.0
 NOISE = np.array([X_OFFSET, Y_OFFSET, Z_OFFSET])
 # Standard deviation of each coordinate for points uniform in the cylinder of
 # sampleUniformPointsIn3D(): radius/2 in x and y (uniform disk) and
