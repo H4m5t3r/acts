@@ -717,14 +717,18 @@ def seedBeamspotWorker(worker_id):
 
 
 class ArbitraryBeamspotTrainer(MlTrainer):
-    def __init__(self, *args, num_workers=None, **kwargs):
+    def __init__(self, *args, num_workers=None, semi_axes=NOISE, **kwargs):
         """num_workers: DataLoader worker processes doing the beamspot sampling
         and propagation for the training batches. None uses the CPUs allocated
         to the job (see allocatedCpuCount()) but one, which is left for the main
         training process, capped at MAX_DEFAULT_NUM_WORKERS since every worker
         holds its own copy of the imported libraries. 0 propagates in the main
-        process."""
+        process.
+        semi_axes: x/y radii and z half-length (mm) of the cylinder the
+        beamspots are sampled in, see sampleUniformPointsIn3D(). All zeros
+        disables the augmentation: every beamspot is then (0, 0, 0)."""
         super().__init__(*args, **kwargs)
+        self.semi_axes = np.asarray(semi_axes, dtype=np.float64)
         if num_workers is None:
             num_workers = min(max(allocatedCpuCount() - 1, 0), MAX_DEFAULT_NUM_WORKERS)
         self.num_workers = num_workers
@@ -743,7 +747,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
         epochs instead of fluctuating with freshly sampled beamspots."""
         rng_state = np.random.get_state()
         np.random.seed(seed)
-        beamspots = sampleUniformPointsIn3D(X_OFFSET, Y_OFFSET, Z_OFFSET, len(X))
+        beamspots = sampleUniformPointsIn3D(*self.semi_axes, len(X))
         np.random.set_state(rng_state)
         y = self._propagateTargets(beamspots, particle_truth).cpu()
         return TensorDataset(
@@ -759,7 +763,7 @@ class ArbitraryBeamspotTrainer(MlTrainer):
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
-            collate_fn=BeamspotPropagationCollate(NOISE, self.output_scaler),
+            collate_fn=BeamspotPropagationCollate(self.semi_axes, self.output_scaler),
             num_workers=self.num_workers,
             worker_init_fn=seedBeamspotWorker,
             # Keeps the workers (and their ACTS imports) alive between epochs

@@ -51,6 +51,13 @@ parser.add_argument("--num_workers", type=int, default=None)
 parser.add_argument(
     "--particle", type=str, default="muon", choices=["electron", "muon"]
 )
+# Training mode. The model architecture (3 beamspot inputs) is the same in all:
+# aug:   narrow vertex data, a new beamspot is sampled per track and batch in the
+#        ml_trainer.NOISE cylinder (beamspot data augmentation)
+# noaug: narrow vertex data, every beamspot at (0, 0, 0)
+# wide:  data generated with a wider vertex (origin) distribution, every
+#        beamspot at (0, 0, 0). Mega data only.
+parser.add_argument("--mode", type=str, default="aug", choices=["aug", "noaug", "wide"])
 args = parser.parse_args()
 
 MODEL_TYPE = "MLP"
@@ -65,6 +72,17 @@ N_HIDDEN_LAYERS = args.hidden
 HIDDEN_DIM = args.neurons
 LOAD_PREV_MODEL = bool(args.load_model)
 MINI_DATA = bool(args.mini_data)
+MODE = args.mode
+AUGMENTATION = MODE == "aug"
+if MODE == "wide" and MINI_DATA:
+    parser.error("--mode wide requires the mega data (--mini_data 0)")
+# Beamspot sampling cylinder (x/y radii, z half-length in mm). All zeros gives
+# the fixed beamspot (0, 0, 0), i.e. no augmentation.
+SEMI_AXES = NOISE if AUGMENTATION else np.zeros(3)
+# Vertex distribution of the mega data: "wide" or "narrow" directory
+VERTEX_DATA = "wide" if MODE == "wide" else "narrow"
+# Mode tag for the run directory, model file and wandb group/run names
+AUGMENTATION_TAG = MODE
 if LOAD_PREV_MODEL and args.seed is None:
     parser.error("--seed is required with --load_model 1 to select the run to load")
 SEED = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
@@ -81,8 +99,8 @@ MINI_ML_TRAIN_DATA_DIRS = [
 MEGA_ML_TRAIN_DATA_DIRS = [
     os.path.join(
         ACTS_DIR,
-        "ml_data/mega_data_{}/{}/{}/narrow/0.0_0.0_0.0/train_100000".format(
-            str(num), PARTICLE, SIMULATION
+        "ml_data/mega_data_{}/{}/{}/{}/0.0_0.0_0.0/train_100000".format(
+            str(num), PARTICLE, SIMULATION, VERTEX_DATA
         ),
     )
     for num in range(10)
@@ -102,8 +120,10 @@ EXTRA_DATA_DIR3 = os.path.join(
 EXTRA_DATA_DIR4 = os.path.join(
     ACTS_DIR, "ml_data/mega_data_97/{}/{}/train_100000".format(PARTICLE, SIMULATION)
 )
-CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b".format(
-    N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE
+# The augmentation tag ends up in the run directory, model file, wandb group
+# and wandb run names, so augmented and non-augmented runs are kept apart
+CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b_{}".format(
+    N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE, AUGMENTATION_TAG
 )
 MODEL_FILE_NAME_ENDING = CONFIG_FILE_NAME_EXTENSION + ".pt"
 
@@ -130,9 +150,20 @@ if __name__ == "__main__":
 # The electron scalers keep their original names (no particle tag) so that
 # existing scaler files are still found; other particles get their own tag.
 SCALER_PREFIX = DATA_PREFIX if PARTICLE == "electron" else DATA_PREFIX + "_" + PARTICLE
+# The wide vertex data is a different dataset, so it gets its own scalers
+if MODE == "wide":
+    SCALER_PREFIX += "_wide"
 INPUT_SCALER_PATH = os.path.join(RUN_DIR, SCALER_PREFIX + "_input_scaler.joblib")
+# Without augmentation the output scaler is fitted on the targets propagated to
+# (0, 0, 0), the same targets the trainer produces then
 OUTPUT_SCALER_PATH = os.path.join(
-    RUN_DIR, SCALER_PREFIX + "_output_scaler_augmented.joblib"
+    RUN_DIR,
+    SCALER_PREFIX
+    + (
+        "_output_scaler_augmented.joblib"
+        if AUGMENTATION
+        else "_output_scaler_noaug.joblib"
+    ),
 )
 # Number of tracks per training directory propagated for the output scaler fit
 AUGMENTED_SCALER_TRACKS_PER_DIR = 20000
@@ -189,6 +220,10 @@ def trainMlpModel(
             # "batch_size": 64,
             "learning_rate": LEARNING_RATE,
             "hidden_size": HIDDEN_DIM,
+            "mode": MODE,
+            "augmentation": AUGMENTATION,
+            "vertex_data": VERTEX_DATA,
+            "beamspot_semi_axes": SEMI_AXES.tolist(),
         },
     )
     # NOTE: Skipping finding of longest sequence length and limiting to well behaved sequences
@@ -203,7 +238,7 @@ def trainMlpModel(
         train_data_dirs,
         input_scaler_path=INPUT_SCALER_PATH,
         output_scaler_path=OUTPUT_SCALER_PATH,
-        augmentation_semi_axes=NOISE,
+        augmentation_semi_axes=SEMI_AXES,
         augmentation_max_tracks_per_dir=AUGMENTED_SCALER_TRACKS_PER_DIR,
     )
     max_seq_len = dh.outlier_roof
@@ -228,6 +263,7 @@ def trainMlpModel(
         input_scaler=dh.getInputScaler(),
         output_scaler=dh.getOutputScaler(),
         num_workers=args.num_workers,
+        semi_axes=SEMI_AXES,
     )
     if LOAD_PREV_MODEL:
         print("LOADING SAVED MODEL WITH THE SAME CONFIGURATION AND SKIPPING TRAINING")
