@@ -536,6 +536,17 @@ class DataHandler:
             [df[self.particle_truth_columns].to_numpy() for df in truth_dfs]
         )
 
+    def filterName(self, data_dir):
+        """Name of the track fitter whose tracksummary file is read for
+        data_dir: "GSF" for tracksummary_gsf.root and "KF" (Kalman filter) for
+        the tracksummary_kf.root fallback, see _dirSelection()."""
+        file_name = os.path.basename(self._dirSelection(data_dir)["tracksummary_path"])
+        if file_name == "tracksummary_kf.root":
+            return "KF"
+        if file_name == "tracksummary_gsf.root":
+            return "GSF"
+        return "Filter"
+
     def createFilterTrackSummaryDf(self, data_dir):
         columns = [
             "event_id",
@@ -1256,6 +1267,7 @@ class Evaluator:
             is_transformer,
             figures_dir,
             file_name_ending,
+            filter_name=self.data_handler.filterName(test_data_dir),
         )
 
     def mlVsModelPlotting(
@@ -1265,32 +1277,37 @@ class Evaluator:
         is_transformer,
         figures_dir,
         file_name_ending,
+        n_bins=150,
+        ranges=None,
+        range_quantile=0.99,
+        range_margin=1.2,
+        filter_name="GSF",
     ):
-        # plt.figure(figsize=(15, 10))
-        alpha = 0.6
-        units = np.array(["mm", "mm", "radians", "radians", "C / (GeV c⁻¹)"])
+        """Overlays the model and track filter residual histograms per
+        parameter. filter_name labels the filter ("GSF" or "KF", see
+        DataHandler.filterName()).
 
+        If `ranges` is None, the symmetric x-range of each histogram is the
+        `range_quantile` quantile of |residual| over both the model and the GSF
+        residuals, widened by `range_margin`, so both distributions fit in the
+        plot without far outliers stretching it. The `n_bins` bins span only the
+        plotted range. Pass explicit `ranges` (list of [lo, hi]) to override.
+        """
+        alpha = 0.6
+        labels = [
+            r"$d_0^{\text{true}}-d_0^{\text{fit}}$ [mm]",
+            r"$z_0^{\text{true}}-z_0^{\text{fit}}$ [mm]",
+            r"$\phi^{\text{true}}-\phi^{\text{fit}}$ [rad]",
+            r"$\theta^{\text{true}}-\theta^{\text{fit}}$ [rad]",
+            r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]",
+        ]
         if is_transformer:
-            ranges = [
-                [-0.06, 0.06],
-                [-10, 10],
-                [-0.175, 0.175],
-                [-0.1, 0.1],
-                [-0.03, 0.03],
-            ]
-            n_bins_list = [70000, 300, 1200, 80, 3000]
-            # ranges = [[-2.5, 2.5], [-5, 5], [-0.025, 0.025], [-0.0025, 0.0025], [-0.2, 0.2]]
+            c = "darkorange"
+            l = "Transformer"
         else:
-            ranges = [
-                [-0.05, 0.05],
-                [-6, 6],
-                [-0.175, 0.175],
-                [-0.08, 0.08],
-                [-0.03, 0.03],
-            ]
-            # n_bins_list = [70000, 500, 1200, 80, 3000]
-            n_bins_list = [110000, 800, 1200, 120, 3000]
-        # fig = plt.figure(figsize=(10, 6))
+            c = "royalblue"
+            l = "MLP"
+
         fig = plt.figure(figsize=(15, 9))
         gs = GridSpec(2, 6, figure=fig)
         ax1 = fig.add_subplot(gs[0, 0:2])
@@ -1299,72 +1316,46 @@ class Evaluator:
         ax4 = fig.add_subplot(gs[1, 1:3])
         ax5 = fig.add_subplot(gs[1, 3:5])
         axes = [ax1, ax2, ax3, ax4, ax5]
-        for i, key in enumerate(residuals_ml.keys(), start=1):
-            # plt.subplot(2, 3, i)  # 2 rows × 3 columns grid
-
-            # Combined bins calculation for combined image
-            n_bins = n_bins_list[i - 1]
-            combined = np.hstack((residuals_ml[key], residuals_filter[key]))
-            min_val, max_val = np.nanmin(combined), np.nanmax(combined)
-            # bins = 200  # adjust as needed
-            bins = np.linspace(min_val, max_val, n_bins + 1)
-            # bins = 200
-            # # For the filter
-            # ranges = [[-0.25, 0.25], [-0.5, 0.5], [-0.01, 0.01], [-0.00075, 0.00075], [-0.03, 0.03]]
-            # n_bins_list = [10000, 5000, 5000, 800, 2000]
-            # # For separate filter visualization
-            # plt.hist(residuals_filter[key], bins=n_bins_list[i], color='skyblue', edgecolor='black', alpha=0.5, label='Filter', density=False)
-            # plt.hist(residuals_filter[key], bins, color='skyblue', edgecolor='black', alpha=0.5, label='Filter', density=False)
-
-            if is_transformer:
-                c = "darkorange"
-                l = "Transformer"
+        for i, key in enumerate(residuals_ml.keys()):
+            res_ml = np.asarray(residuals_ml[key])
+            res_ml = res_ml[np.isfinite(res_ml)]
+            res_filter = np.asarray(residuals_filter[key])
+            res_filter = res_filter[np.isfinite(res_filter)]
+            if ranges is None:
+                half = range_margin * np.quantile(
+                    np.abs(np.concatenate((res_ml, res_filter))), range_quantile
+                )
+                if half <= 0:
+                    half = 1e-6
+                lo, hi = -half, half
             else:
-                c = "royalblue"
-                l = "MLP"
+                lo, hi = ranges[i]
+            bins = np.linspace(lo, hi, n_bins + 1)
 
-            ax = axes[i - 1]
-            ax.hist(
-                residuals_ml[key],
-                bins=bins,
-                color=c,
-                edgecolor="black",
-                alpha=alpha,
-                label=l,
-                density=False,
-            )
-            ax.hist(
-                residuals_filter[key],
-                bins=bins,
-                color="red",
-                edgecolor="black",
-                alpha=alpha,
-                label="GSF",
-                density=False,
-            )
+            ax = axes[i]
+            for res, color, name in (
+                (res_ml, c, l),
+                (res_filter, "red", filter_name),
+            ):
+                ax.hist(
+                    res,
+                    bins=bins,
+                    color=color,
+                    edgecolor="black",
+                    linewidth=0.3,
+                    alpha=alpha,
+                    label="{} (RMS {:.3g})".format(name, np.sqrt(np.mean(res**2))),
+                    density=False,
+                )
             ax.axvline(0, color="black", linestyle="--", linewidth=1)
             ax.grid(True)
-            ax.set_xlim(ranges[i - 1])
-            ax.set_xlabel(f"Residual ({units[i-1]})")
+            ax.set_xlim(lo, hi)
+            ax.set_xlabel(labels[i])
             ax.set_ylabel("Frequency")
             ax.set_title(f"Residuals for {key}")
-            ax.legend()
+            ax.legend(fontsize=8)
 
-            # plt.hist(residuals_ml[key], bins=n_bins_list[i-1], color='blue', edgecolor='black', alpha=alpha, label='MLP', density=False)
-            # plt.hist(residuals_ml[key], bins=50, color='blue', edgecolor='black', alpha=alpha, label='MLP', density=False)
-            # ax = plt.gca()
-            # plt.xlabel("Residual ({})".format(units[i-1]))
-            # plt.ylabel("Frequency")
-            # plt.title(f"Residuals for {key}")
-            # plt.legend()
-
-        # ax = plt.gca()
-        # ax[0].set_xlim([-0.025, 0.025])
-        # ax[1].set_xlim([-10, 10])
-        # ax[2].set_xlim([-0.025, 0.025])
-        # ax[3].set_xlim([-0.15, 0.15])
-        # ax[4].set_xlim([-0.04, 0.04])
-        fig.suptitle(f"{l} residuals compared to GSF residuals")
+        fig.suptitle(f"{l} residuals compared to {filter_name} residuals")
         plt.tight_layout()
         res_fig_path = os.path.join(
             figures_dir, "MEGA_model_to_filter_comparison" + file_name_ending
@@ -1372,7 +1363,8 @@ class Evaluator:
         ensureParentDir(res_fig_path)
         plt.savefig(res_fig_path, dpi=300)
         # plt.show()
-        print("Saved model VS. filter z_0 comparison to", res_fig_path)
+        plt.close(fig)
+        print("Saved model VS. filter comparison to", res_fig_path)
 
     # Copypaste of the two functions above for combining the MLP and transformer figures
     # into one
