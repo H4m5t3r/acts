@@ -1026,8 +1026,21 @@ class Evaluator:
         labels,
         res_fig_path,
         res_fig_title=None,
-        res_distr_bins=50,
+        res_distr_bins=100,
+        ranges=None,
+        range_quantile=0.99,
+        range_margin=1.2,
+        symmetric=True,
     ):
+        """
+        Plot 1D residual histograms.
+
+        If `ranges` is None, the x-range of each histogram is determined from
+        the data: the `range_quantile` quantile of |residual| (symmetric=True)
+        or the [1-q, q] quantiles (symmetric=False), widened by `range_margin`.
+        Binning is done only inside the plotted range so no bins are wasted
+        on far outliers. Pass explicit `ranges` (list of [lo, hi]) to override.
+        """
         # fig, axes = plt.subplots(nrows=1, ncols=n_residuals, figsize=(5 * n_residuals, 4))
         fig = plt.figure(figsize=(10, 6))
         gs = GridSpec(2, 6, figure=fig)
@@ -1039,41 +1052,52 @@ class Evaluator:
         axes = [ax1, ax2, ax3, ax4, ax5]
         if n_residuals == 1:
             axes = [axes]
-        # TRANSFORMER RANGES
-        if is_transformer:
-            # ranges = [[-0.03, 0.03], [-25, 25], [-0.35, 0.35], [-0.25, 0.25], [-0.05, 0.05]]
-            ranges = [[-0.02, 0.02], [-25, 25], [-0.4, 0.4], [-0.2, 0.2], [-0.03, 0.03]]
-            # ranges = [[-0.02, 0.02], [-25, 25], [-0.4, 0.4], [-0.2, 0.2], [-0.03, 0.03]]
-            # bins = [100, 70, 50, 50, 75]
-            bins = [100, 70, 50, 50, 75]
-            ml_color = "darkorange"
-        # MLP RANGES
-        else:
-            # ranges = [[-0.005, 0.005], [-23, 23], [-0.35, 0.35], [-0.25, 0.25], [-0.03, 0.03]]
-            ranges = [
-                [-0.002, 0.002],
-                [-25, 25],
-                [-0.4, 0.4],
-                [-0.2, 0.2],
-                [-0.03, 0.03],
-            ]
-            # ranges = [[-0.02, 0.02], [-25, 25], [-0.4, 0.4], [-0.2, 0.2], [-0.03, 0.03]]
-            # bins = [100, 70, 50, 50, 75]
-            # bins = [100, 70, 50, 50, 75]
-            bins = [400, 70, 50, 50, 75]
-            ml_color = "cornflowerblue"
+        ml_color = "darkorange" if is_transformer else "cornflowerblue"
+        residuals = np.asarray(residuals)
+        if ranges is None:
+            ranges = []
+            for i in range(n_residuals):
+                res = residuals[:, i]
+                res = res[np.isfinite(res)]
+                if symmetric:
+                    half = np.quantile(np.abs(res), range_quantile) * range_margin
+                    if half <= 0:
+                        half = 1e-6
+                    ranges.append([-half, half])
+                else:
+                    lo, hi = np.quantile(res, [1 - range_quantile, range_quantile])
+                    pad = 0.5 * (hi - lo) * (range_margin - 1)
+                    if hi - lo <= 0:
+                        pad = 1e-6
+                    ranges.append([lo - pad, hi + pad])
         for i in range(n_residuals):
-            # axes[i].hist(residuals[:, i], bins=bins[i], color='skyblue', edgecolor='black')
+            res = residuals[:, i]
+            lo, hi = ranges[i]
+            n_outside = np.count_nonzero((res < lo) | (res > hi))
             axes[i].hist(
-                residuals[:, i], bins=bins[i], color=ml_color, edgecolor="black"
+                res,
+                bins=res_distr_bins,
+                range=(lo, hi),
+                color=ml_color,
+                edgecolor="black",
+                linewidth=0.3,
             )
-            # axes[i].set_title(f'Residuals for {variable_names[i]}')
             axes[i].set_title(f"{variable_names[i]}")
             axes[i].set_xlabel(f"{labels[i]}")
             axes[i].set_ylabel("Frequency")
-            axes[i].set_xlim(ranges[i])
+            axes[i].set_xlim(lo, hi)
+            # axes[i].ticklabel_format(axis="x", style="sci", scilimits=(-2, 3))
             axes[i].grid(True)
-            # axes[i].set_xlim(-0.1, 0.1)
+            # axes[i].text(
+            #     0.98,
+            #     0.95,
+            #     f"RMS: {np.sqrt(np.mean(res**2)):.3g}\n"
+            #     f"outside: {100 * n_outside / len(res):.2f}%",
+            #     transform=axes[i].transAxes,
+            #     ha="right",
+            #     va="top",
+            #     fontsize=7,
+            # )
         if res_fig_title:
             fig.suptitle(res_fig_title)
         plt.tight_layout()
