@@ -256,7 +256,8 @@ def comparisonHistograms(residuals_by_mode, title, fig_path):
                 histtype="step",
                 linewidth=1.3,
                 color=MODE_COLORS[mode],
-                # label="{} (RMS {:.3g})".format(MODE_LABELS[mode], rms),
+                label="{} (RMS {:.3g})".format(MODE_LABELS[mode], rms),
+                alpha=0.7,
             )
         ax.set_title(VARIABLE_NAMES[i])
         ax.set_xlabel(LABELS[i])
