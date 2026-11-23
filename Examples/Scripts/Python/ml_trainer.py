@@ -51,14 +51,36 @@ def getMlpOutputs(model, X_gpu, max_seq_len=None, device=None):
     return model(X_gpu)  # .squeeze()
 
 
-def getAugmentedMlpOutputs(model, X_gpu, beamspots):
-    """Beamspots are given in mm and standardised here with BEAMSPOT_SCALE so
-    they are on the same footing as the standardised hit coordinates."""
+def standardiseBeamspots(beamspots):
+    """Beamspots (batch, 3) in mm standardised with BEAMSPOT_SCALE, so they are
+    on the same footing as the standardised hit coordinates."""
     beamspot_scale = torch.as_tensor(
         BEAMSPOT_SCALE, dtype=beamspots.dtype, device=beamspots.device
     )
-    mlp_input = torch.cat((X_gpu, beamspots / beamspot_scale), dim=1)
+    return beamspots / beamspot_scale
+
+
+def getAugmentedMlpOutputs(model, X_gpu, beamspots):
+    """Beamspots are given in mm and standardised here with BEAMSPOT_SCALE so
+    they are on the same footing as the standardised hit coordinates."""
+    mlp_input = torch.cat((X_gpu, standardiseBeamspots(beamspots)), dim=1)
     return model(mlp_input)
+
+
+def getAugmentedTransformerOutputs(model, X_gpu, beamspots):
+    """Feeds a transformer the flat hit rows (batch, seq_len*3) as a sequence of
+    hit tokens (batch, seq_len, 3), with the standardised beamspot appended to
+    every token: (batch, seq_len, 6), i.e. the model needs input_dim=6.
+    The padding mask is computed from the hit coordinates *before* the
+    beamspot is appended, since padded tokens are no longer all zeros after."""
+    batch_size = X_gpu.shape[0]
+    hits = X_gpu.reshape(batch_size, -1, 3)
+    mask = (hits == 0).all(dim=2)  # (batch, seq_len), True = padding
+    beamspot_tokens = (
+        standardiseBeamspots(beamspots).unsqueeze(1).expand(-1, hits.shape[1], -1)
+    )
+    transformer_input = torch.cat((hits, beamspot_tokens), dim=2)
+    return model(transformer_input, mask=mask)
 
 
 def getTransformerOutputs(model, X_gpu, max_seq_len, device):

@@ -730,11 +730,13 @@ class Evaluator:
         getAugmentedOutputs=None,
         beamspot=(0.0, 0.0, 0.0),
     ):
-        """getAugmentedOutputs: for MLPs trained with beamspot augmentation, the
-        function feeding the model its inputs together with the beamspot,
-        called as getAugmentedOutputs(model, X_gpu, beamspots_gpu) (e.g.
-        ml_trainer.getAugmentedMlpOutputs). None for models taking only the
-        hit coordinates.
+        """getAugmentedOutputs: for models (MLP or transformer) taking the
+        beamspot as input, the function feeding the model its inputs together
+        with the beamspot, called as getAugmentedOutputs(model, X_gpu,
+        beamspots_gpu) (e.g. ml_trainer.getAugmentedMlpOutputs or
+        ml_trainer.getAugmentedTransformerOutputs). It is then used for every
+        prediction, regardless of is_transformer. None for models taking only
+        the hit coordinates.
         beamspot: (x, y, z) in mm given to such models for every track. The
         truth and GSF parameters in the tracksummary are w.r.t. the origin, so
         the default (0, 0, 0) is the one the evaluation plots compare against."""
@@ -1580,7 +1582,9 @@ class Evaluator:
             all_targets = []
         with torch.no_grad():
             for X_batch, y_batch in dataloader:
-                if is_transformer:
+                # Beamspot models (MLP or transformer) go through
+                # getAugmentedOutputs in makeMlpResidualPredictions()
+                if is_transformer and self.getAugmentedOutputs is None:
                     preds = self.makeTransformerResidualPredictions(
                         model, X_batch, y_batch, device
                     )

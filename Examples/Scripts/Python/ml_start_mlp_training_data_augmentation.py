@@ -9,9 +9,10 @@ from ml_utilities import DataHandler, Evaluator
 from ml_trainer import (
     ArbitraryBeamspotTrainer,
     getAugmentedMlpOutputs,
+    getAugmentedTransformerOutputs,
     NOISE,
 )
-from ml_regressor_models import MLP, printModelSummary
+from ml_regressor_models import MLP, TransformerRegressor, printModelSummary
 import torch
 import random
 from sklearn.model_selection import train_test_split
@@ -30,11 +31,23 @@ import numpy as np
 import sys
 
 parser = argparse.ArgumentParser()
+# Model architecture. Both take the beamspot as input: the MLP gets it appended
+# to the flattened hit coordinates, the transformer gets it appended to every
+# hit token (6 features per token).
+parser.add_argument("--model", type=str, default="mlp", choices=["mlp", "transformer"])
 parser.add_argument("--n_epochs", type=int, default=1000)
 # parser.add_argument("--data_reading_batch_size", type=int, default=100000)
 parser.add_argument("--batch_size", type=int, default=1024)
+# MLP hyperparameters
 parser.add_argument("--hidden", type=int, default=2)
 parser.add_argument("--neurons", type=int, default=32)
+# Transformer hyperparameters
+parser.add_argument("--model_dim", type=int, default=128)
+parser.add_argument("--heads", type=int, default=6)
+parser.add_argument("--ff_dim", type=int, default=512)
+parser.add_argument("--layers", type=int, default=6)
+parser.add_argument("--dropout", type=float, default=0.1)
+parser.add_argument("--mlp_width", type=int, default=1024)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--load_model", type=int, default=0)
 parser.add_argument("--mini_data", type=int, default=0)
@@ -60,7 +73,12 @@ parser.add_argument(
 parser.add_argument("--mode", type=str, default="aug", choices=["aug", "noaug", "wide"])
 args = parser.parse_args()
 
-MODEL_TYPE = "MLP"
+IS_TRANSFORMER = args.model == "transformer"
+MODEL_TYPE = "Transformer" if IS_TRANSFORMER else "MLP"
+# Feeds the model its hit inputs together with the beamspot
+GET_MODEL_OUTPUTS = (
+    getAugmentedTransformerOutputs if IS_TRANSFORMER else getAugmentedMlpOutputs
+)
 # NOTE: USERS: Set these variables:
 PARTICLE = args.particle
 SIMULATION = "geant4"
@@ -122,19 +140,40 @@ EXTRA_DATA_DIR4 = os.path.join(
 )
 # The augmentation tag ends up in the run directory, model file, wandb group
 # and wandb run names, so augmented and non-augmented runs are kept apart
-CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b_{}".format(
-    N_EPOCHS, N_HIDDEN_LAYERS, HIDDEN_DIM, LEARNING_RATE, BATCH_SIZE, AUGMENTATION_TAG
-)
+if IS_TRANSFORMER:
+    CONFIG_FILE_NAME_EXTENSION = (
+        "_{}e_{}l_{}d_{}heads_{}ff_{}w_{}do_{}lr_{}b_{}".format(
+            N_EPOCHS,
+            args.layers,
+            args.model_dim,
+            args.heads,
+            args.ff_dim,
+            args.mlp_width,
+            args.dropout,
+            LEARNING_RATE,
+            BATCH_SIZE,
+            AUGMENTATION_TAG,
+        )
+    )
+else:
+    CONFIG_FILE_NAME_EXTENSION = "_{}e_{}h_{}n_{}lr_{}b_{}".format(
+        N_EPOCHS,
+        N_HIDDEN_LAYERS,
+        HIDDEN_DIM,
+        LEARNING_RATE,
+        BATCH_SIZE,
+        AUGMENTATION_TAG,
+    )
 MODEL_FILE_NAME_ENDING = CONFIG_FILE_NAME_EXTENSION + ".pt"
 
 DATA_PREFIX = "mini" if MINI_DATA else "mega"
-WANDB_PROJECT_NAME = (
-    "Mini Data augmentation MLP" if MINI_DATA else "Mega Data augmentation MLP"
+WANDB_PROJECT_NAME = "{} Data augmentation {}".format(
+    "Mini" if MINI_DATA else "Mega", MODEL_TYPE
 )
 # One directory per model configuration, with one subdirectory per run (seed)
 # holding that run's model and figures:
-# runs/<mini|mega>_<particle>_mlp<config>/seed_<seed>/
-MODEL_PREFIX = DATA_PREFIX + "_" + PARTICLE + "_mlp"
+# runs/<mini|mega>_<particle>_<mlp|transformer><config>/seed_<seed>/
+MODEL_PREFIX = DATA_PREFIX + "_" + PARTICLE + "_" + args.model
 CONFIG_NAME = MODEL_PREFIX + CONFIG_FILE_NAME_EXTENSION
 CONFIG_DIR = os.path.join(RUN_DIR, CONFIG_NAME)
 RUN_NAME = "seed_{}".format(SEED)
@@ -167,16 +206,21 @@ OUTPUT_SCALER_PATH = os.path.join(
 )
 # Number of tracks per training directory propagated for the output scaler fit
 AUGMENTED_SCALER_TRACKS_PER_DIR = 20000
-RES_FIG_TITLE = "MLP: {} hidden layers with size {}".format(
-    str(N_HIDDEN_LAYERS), str(HIDDEN_DIM)
-)
+if IS_TRANSFORMER:
+    RES_FIG_TITLE = "Transformer: {} layers, model dim {}, {} heads".format(
+        args.layers, args.model_dim, args.heads
+    )
+else:
+    RES_FIG_TITLE = "MLP: {} hidden layers with size {}".format(
+        str(N_HIDDEN_LAYERS), str(HIDDEN_DIM)
+    )
 
 TRUTH_DISTR_FIG_PATH = os.path.join(FIGURES_DIR, "truth_distributions.png")
 FILTER_RES_FIG_PATH = os.path.join(FIGURES_DIR, "filter_residuals.png")
 ML_RES_FIG_PATH = os.path.join(
     FIGURES_DIR,
-    "prediction_residuals_mlp_{}_{}_{}e_{}h_{}n.png".format(
-        PARTICLE, SIMULATION, str(N_EPOCHS), str(N_HIDDEN_LAYERS), str(HIDDEN_DIM)
+    "prediction_residuals_{}_{}_{}{}.png".format(
+        args.model, PARTICLE, SIMULATION, CONFIG_FILE_NAME_EXTENSION
     ),
 )
 DISTR_FIG_BASE_PATH = os.path.join(FIGURES_DIR, CONFIG_FILE_NAME_EXTENSION)
@@ -184,7 +228,45 @@ DISTR_FIG_BASE_PATH = os.path.join(FIGURES_DIR, CONFIG_FILE_NAME_EXTENSION)
 START_TIME = time.time()
 
 
-def trainMlpModel(
+def buildModel(max_seq_len, output_dim=5):
+    if IS_TRANSFORMER:
+        return TransformerRegressor(
+            # Hit coordinates and 3 beamspot coordinates per hit token, see
+            # ml_trainer.getAugmentedTransformerOutputs()
+            input_dim=6,
+            model_dim=args.model_dim,
+            num_heads=args.heads,
+            dim_feedforward=args.ff_dim,
+            num_layers=args.layers,
+            output_dim=output_dim,
+            max_seq_len=max_seq_len,
+            dropout=args.dropout,
+            mlp_width=args.mlp_width,
+        )
+    return MLP(
+        # Coordinates and 3 beamspot coordinates
+        input_dim=max_seq_len * 3 + 3,
+        output_dim=output_dim,
+        hidden_dim=HIDDEN_DIM,
+        n_hidden_layers=N_HIDDEN_LAYERS,
+    )
+
+
+def modelConfig():
+    """Architecture hyperparameters logged to wandb"""
+    if IS_TRANSFORMER:
+        return {
+            "model_dim": args.model_dim,
+            "num_heads": args.heads,
+            "dim_feedforward": args.ff_dim,
+            "num_layers": args.layers,
+            "dropout": args.dropout,
+            "mlp_width": args.mlp_width,
+        }
+    return {"hidden_size": HIDDEN_DIM, "hidden_layers": N_HIDDEN_LAYERS}
+
+
+def trainModel(
     train_data_dirs=MEGA_ML_TRAIN_DATA_DIRS[:8],
     val_data_dir=MEGA_ML_TRAIN_DATA_DIRS[8],
     test_data_dir=MEGA_ML_TRAIN_DATA_DIRS[9],
@@ -192,11 +274,11 @@ def trainMlpModel(
 ):
     figures_dir = FIGURES_DIR
 
-    print("Running MLP training with POCA parameter data")
+    print("Running {} training with POCA parameter data".format(MODEL_TYPE))
     print("Using data from directories", train_data_dirs)
-    print("MLP details:")
-    print("Hidden layers: {}".format(str(N_HIDDEN_LAYERS)))
-    print("Hidden layer size: {}".format(str(HIDDEN_DIM)))
+    print("{} details:".format(MODEL_TYPE))
+    for name, value in modelConfig().items():
+        print("{}: {}".format(name, value))
 
     print("Run seed:", SEED)
     random.seed(SEED)
@@ -206,20 +288,21 @@ def trainMlpModel(
     print("Initializing wandb project")
     project_name = "Debugging" if co.TEST_ENV else WANDB_PROJECT_NAME
     # run_name = "MLP_{}h_{}n_{}lr".format(str(N_HIDDEN_LAYERS), str(HIDDEN_DIM), str(LEARNING_RATE))
-    run_name = "MLP{}_{}".format(CONFIG_FILE_NAME_EXTENSION, RUN_NAME)
+    run_name = "{}{}_{}".format(MODEL_TYPE, CONFIG_FILE_NAME_EXTENSION, RUN_NAME)
     # run = wandb.init(project=MEGA_WANDB_PROJECT_NAME, name=run_name, config={
     # run = wandb.init(project="Debugging", name="Debug", config={
     run = wandb.init(
         project=project_name,
         name=run_name,
         # Runs with the same configuration but different seeds are grouped
-        group="MLP{}".format(CONFIG_FILE_NAME_EXTENSION),
+        group="{}{}".format(MODEL_TYPE, CONFIG_FILE_NAME_EXTENSION),
         config={
+            "model": args.model,
             "seed": SEED,
             "epochs": N_EPOCHS,
-            # "batch_size": 64,
+            "batch_size": BATCH_SIZE,
             "learning_rate": LEARNING_RATE,
-            "hidden_size": HIDDEN_DIM,
+            **modelConfig(),
             "mode": MODE,
             "augmentation": AUGMENTATION,
             "vertex_data": VERTEX_DATA,
@@ -244,20 +327,14 @@ def trainMlpModel(
     max_seq_len = dh.outlier_roof
     output_dim = 5
 
-    model = MLP(
-        # Coordinates and 3 beamspot coordinates
-        input_dim=max_seq_len * 3 + 3,
-        output_dim=output_dim,
-        hidden_dim=HIDDEN_DIM,
-        n_hidden_layers=N_HIDDEN_LAYERS,
-    )
+    model = buildModel(max_seq_len, output_dim)
     printModelSummary(model)
 
     trainer = ArbitraryBeamspotTrainer(
         n_epochs=N_EPOCHS,
         learning_rate=LEARNING_RATE,
         batch_size=BATCH_SIZE,
-        getModelOutputs=getAugmentedMlpOutputs,
+        getModelOutputs=GET_MODEL_OUTPUTS,
         model_save_path=MODEL_SAVE_PATH,
         max_seq_len=max_seq_len,
         input_scaler=dh.getInputScaler(),
@@ -326,31 +403,31 @@ def trainMlpModel(
         trainer.input_scaler,
         trainer.output_scaler,
         dh,
-        getAugmentedOutputs=getAugmentedMlpOutputs,
+        getAugmentedOutputs=GET_MODEL_OUTPUTS,
         beamspot=(0.0, 0.0, 0.0),
     )
 
-    ev.plotDistributions(
-        test_data_dir, model, is_transformer=False, distr_base_path=DISTR_FIG_BASE_PATH
-    )
+    # ev.plotDistributions(
+    #     test_data_dir, model, is_transformer=False, distr_base_path=DISTR_FIG_BASE_PATH
+    # )
     # Truth parameters after the same beamspot augmentation as in training,
     # for one of the training directories
-    ev.plotAugmentedTruthDistributions(
-        train_data_dirs[0],
-        DISTR_FIG_BASE_PATH,
-        semi_axes=NOISE,
-        max_tracks=AUGMENTED_SCALER_TRACKS_PER_DIR,
-        seed=SEED,
-    )
+    # ev.plotAugmentedTruthDistributions(
+    #     train_data_dirs[0],
+    #     DISTR_FIG_BASE_PATH,
+    #     semi_axes=NOISE,
+    #     max_tracks=AUGMENTED_SCALER_TRACKS_PER_DIR,
+    #     seed=SEED,
+    # )
     # ev.correlationPlots(test_data_dir, model, is_transformer=False)
 
-    ev.evaluatePOCAParameterResiduals(
-        model, test_data_dir, is_transformer=False, res_fig_path=ML_RES_FIG_PATH
-    )
+    # ev.evaluatePOCAParameterResiduals(
+    #     model, test_data_dir, is_transformer=False, res_fig_path=ML_RES_FIG_PATH
+    # )
 
-    ev.residualCorrelationHeatmaps(
-        model, test_data_dir, is_transformer=False, fig_dir=figures_dir
-    )
+    # ev.residualCorrelationHeatmaps(
+    #     model, test_data_dir, is_transformer=False, fig_dir=figures_dir
+    # )
 
     file_name_ending = "".join(
         ["_{}_vs_filter".format(MODEL_TYPE), CONFIG_FILE_NAME_EXTENSION, ".png"]
@@ -358,7 +435,7 @@ def trainMlpModel(
     ev.pocaModelToGSFComparison(
         model,
         test_data_dir,
-        is_transformer=False,
+        is_transformer=IS_TRANSFORMER,
         figures_dir=figures_dir,
         file_name_ending=file_name_ending,
     )
@@ -392,18 +469,18 @@ if __name__ == "__main__":
         # trainMegaMlpModel(train_data_dirs=debug_dirs)
         # trainMegaMlpModel(train_data_dirs=[MEGA_ML_TRAIN_DATA_DIRS[0]])
         # trainMegaMlpModel(train_data_dirs=[ten_thousant_dir])
-        # trainMlpModel()
-        # trainMlpModel(
+        # trainModel()
+        # trainModel(
         #     train_data_dirs=data_dirs[:8],
         #     val_data_dir=data_dirs[8],
         #     test_data_dir=data_dirs[9]
         # )
-        trainMlpModel(
+        trainModel(
             train_data_dirs=debug_dirs,
             val_data_dir=debug_dirs[1],
             test_data_dir=debug_dirs[1],
         )
-        # trainMlpModel(
+        # trainModel(
         #     train_data_dirs=data_dirs[:8],
         #     val_data_dir=data_dirs[8],
         #     test_data_dir=data_dirs[9]
@@ -411,8 +488,8 @@ if __name__ == "__main__":
         # )
     else:
         print("Using the real dataset")
-        # trainMlpModel()
-        trainMlpModel(
+        # trainModel()
+        trainModel(
             train_data_dirs=data_dirs[:8],
             val_data_dir=data_dirs[8],
             test_data_dir=data_dirs[9],
