@@ -9,6 +9,9 @@ the residuals are w.r.t. the truth parameters in the tracksummary.
 The models to compare are given by their .pt file paths, one argument per
 mode (at least one). The MLP layer sizes are read from the model files.
 
+The per-track Kalman filter residuals of the same test data (res_*_fit in
+tracksummary_kf.root, also fit - truth) are drawn as a reference.
+
 Example:
     python ml_compare_augmentation_models.py --particle muon \
         --aug_model runs/<config>_aug/seed_<seed>/<model>.pt \
@@ -22,6 +25,7 @@ import argparse
 
 import numpy as np
 import torch
+import uproot
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
@@ -37,6 +41,19 @@ MODE_LABELS = {
     "wide": "Wide vertex data",
 }
 MODE_COLORS = {"aug": "cornflowerblue", "noaug": "darkorange", "wide": "forestgreen"}
+
+KF_FILE = "tracksummary_kf.root"
+KF_TREE = "tracksummary"
+# Per-track residuals (fit - truth) of d0, z0, phi, theta, q/p
+KF_BRANCHES = [
+    "res_eLOC0_fit",
+    "res_eLOC1_fit",
+    "res_ePHI_fit",
+    "res_eTHETA_fit",
+    "res_eQOP_fit",
+]
+KF_LABEL = "Kalman filter"
+KF_COLOR = "black"
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -61,6 +78,8 @@ parser.add_argument(
     choices=["narrow", "wide"],
 )
 parser.add_argument("--test_dir_number", type=int, default=9)
+# Draw the Kalman filter residuals from tracksummary_kf.root as a reference
+parser.add_argument("--kalman", type=int, default=1)
 parser.add_argument("--bins", type=int, default=100)
 # Plotted range per parameter: this quantile of |residual|, taken over all
 # models, times 1.2
@@ -98,11 +117,11 @@ COMPARISON_DIR = (
 
 VARIABLE_NAMES = [r"$d_0$", r"$z_0$", r"$\phi$", r"$\theta$", r"$q/p$"]
 LABELS = [
-    r"$d_0^{\text{true}}-d_0^{\text{fit}}$ [mm]",
-    r"$z_0^{\text{true}}-z_0^{\text{fit}}$ [mm]",
-    r"$\phi^{\text{true}}-\phi^{\text{fit}}$ [rad]",
-    r"$\theta^{\text{true}}-\theta^{\text{fit}}$ [rad]",
-    r"$q/p^{\text{true}}-q/p^{\text{fit}}$ [$\text{GeV}^{-1}$]",
+    r"$d_0^{\text{fit}}-d_0^{\text{true}}$ [mm]",
+    r"$z_0^{\text{fit}}-z_0^{\text{true}}$ [mm]",
+    r"$\phi^{\text{fit}}-\phi^{\text{true}}$ [rad]",
+    r"$\theta^{\text{fit}}-\theta^{\text{true}}$ [rad]",
+    r"$q/p^{\text{fit}}-q/p^{\text{true}}$ [$\text{GeV}^{-1}$]",
 ]
 
 
@@ -212,23 +231,46 @@ def computeResiduals(mode, test_data_dir):
     )
 
 
-def printStatistics(residuals_by_mode):
+def loadKalmanResiduals(test_data_dir):
+    """Per-track Kalman filter residuals (fit - truth) of the test directory as
+    an (n_tracks, 5) array, or None if the file is missing. Tracks without
+    fitted parameters are left out."""
+    path = os.path.join(test_data_dir, KF_FILE)
+    if not os.path.isfile(path):
+        print("WARNING: {} not found, no Kalman filter residuals".format(path))
+        return None
+    with uproot.open(path) as f:
+        arrays = f[KF_TREE].arrays(["hasFittedParams"] + KF_BRANCHES, library="np")
+    # One entry per event, each holding the vector of tracks of the event
+    fitted = np.concatenate(arrays["hasFittedParams"]).astype(bool)
+    residuals = np.stack(
+        [np.concatenate(arrays[branch]) for branch in KF_BRANCHES], axis=1
+    ).astype(np.float64)
+    print(
+        "Kalman filter: {} of {} tracks with fitted parameters".format(
+            fitted.sum(), len(fitted)
+        )
+    )
+    return residuals[fitted]
+
+
+def printStatistics(residuals_by_label):
     names = ["d0", "z0", "phi", "theta", "q/p"]
     print("\nResidual statistics (mean, RMS, half width of the central 68%):")
     for i, name in enumerate(names):
         print(name)
-        for mode, residuals in residuals_by_mode.items():
+        for label, residuals in residuals_by_label.items():
             res = residuals[:, i]
             res = res[np.isfinite(res)]
             q16, q84 = np.quantile(res, [0.16, 0.84])
             print(
                 "  {:6s} mean {: .4e}  RMS {:.4e}  68% half width {:.4e}".format(
-                    mode, np.mean(res), np.sqrt(np.mean(res**2)), 0.5 * (q84 - q16)
+                    label, np.mean(res), np.sqrt(np.mean(res**2)), 0.5 * (q84 - q16)
                 )
             )
 
 
-def comparisonHistograms(residuals_by_mode, title, fig_path):
+def comparisonHistograms(residuals_by_mode, title, fig_path, kf_residuals=None):
     fig = plt.figure(figsize=(12, 7))
     gs = GridSpec(2, 6, figure=fig)
     axes = [
@@ -238,15 +280,26 @@ def comparisonHistograms(residuals_by_mode, title, fig_path):
         fig.add_subplot(gs[1, 1:3]),
         fig.add_subplot(gs[1, 3:5]),
     ]
+    # Each entry: residuals, label, histogram style
+    series = [
+        (
+            residuals,
+            MODE_LABELS[mode],
+            dict(color=MODE_COLORS[mode], alpha=0.7),
+        )
+        for mode, residuals in residuals_by_mode.items()
+    ]
+    if kf_residuals is not None:
+        series.append((kf_residuals, KF_LABEL, dict(color=KF_COLOR, linestyle="--")))
     for i, ax in enumerate(axes):
-        # Common symmetric range for all models
+        # Common symmetric range for all models and the Kalman filter
         half = 1.2 * max(
             np.quantile(np.abs(res[np.isfinite(res[:, i]), i]), args.range_quantile)
-            for res in residuals_by_mode.values()
+            for res, _, _ in series
         )
         half = half if half > 0 else 1e-6
         bin_edges = np.linspace(-half, half, args.bins + 1)
-        for mode, residuals in residuals_by_mode.items():
+        for residuals, label, style in series:
             res = residuals[:, i]
             res = res[np.isfinite(res)]
             rms = np.sqrt(np.mean(res**2))
@@ -255,14 +308,14 @@ def comparisonHistograms(residuals_by_mode, title, fig_path):
                 bins=bin_edges,
                 histtype="step",
                 linewidth=1.3,
-                color=MODE_COLORS[mode],
-                label="{} (RMS {:.3g})".format(MODE_LABELS[mode], rms),
-                alpha=0.7,
+                label="{} (RMS {:.3g})".format(label, rms),
+                **style,
             )
         ax.set_title(VARIABLE_NAMES[i])
         ax.set_xlabel(LABELS[i])
         ax.set_ylabel("Frequency")
         ax.set_xlim(-half, half)
+        # ax.set_xlim(-0.2, 0.2)
         if args.log_y:
             ax.set_yscale("log")
         ax.grid(True)
@@ -287,7 +340,12 @@ def main():
         n_tracks = {len(res) for res in residuals_by_mode.values()}
         if len(n_tracks) != 1:
             print("WARNING: the models were evaluated on different numbers of tracks")
-        printStatistics(residuals_by_mode)
+        kf_residuals = loadKalmanResiduals(test_data_dir) if args.kalman else None
+        printStatistics(
+            residuals_by_mode
+            if kf_residuals is None
+            else {**residuals_by_mode, "kf": kf_residuals}
+        )
         fig_path = os.path.join(
             COMPARISON_DIR,
             "residual_comparison_{}_{}_test_{}.png".format(
@@ -298,6 +356,7 @@ def main():
             residuals_by_mode,
             "MLP residuals on {} vertex test data".format(vertex_data),
             fig_path,
+            kf_residuals,
         )
 
 
