@@ -59,6 +59,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--particle", type=str, default="muon", choices=["electron", "muon"]
 )
+# Particle whose training scalers are loaded. Default: same as --particle. Set
+# e.g. --particle electron --scaler_particle muon to evaluate muon-trained
+# models on electron data with the muon scalers.
+parser.add_argument(
+    "--scaler_particle", type=str, default=None, choices=["electron", "muon"]
+)
 # Path to the .pt model file of each mode. Modes without a path are left out
 # of the comparison.
 for mode in MODES:
@@ -80,15 +86,40 @@ parser.add_argument(
 parser.add_argument("--test_dir_number", type=int, default=9)
 # Draw the Kalman filter residuals from tracksummary_kf.root as a reference
 parser.add_argument("--kalman", type=int, default=1)
-parser.add_argument("--bins", type=int, default=100)
+# Number of bins: one value for all histograms, or five values, one per
+# parameter in the order d0 z0 phi theta q/p
+parser.add_argument("--bins", type=int, nargs="+", default=[100])
 # Plotted range per parameter: this quantile of |residual|, taken over all
 # models, times 1.2
 parser.add_argument("--range_quantile", type=float, default=0.99)
+# Fixed half-width of the plotted range (-h, h) per parameter, overriding
+# --range_quantile: one value for all or five values (d0 z0 phi theta q/p).
+# A value <= 0 keeps the automatic range for that parameter.
+parser.add_argument("--half_range", type=float, nargs="+", default=None)
 parser.add_argument("--log_y", type=int, default=0)
 parser.add_argument("--show", type=int, default=0)
+# Resolution of the saved figure (pixels = figsize in inches * dpi)
+parser.add_argument("--dpi", type=int, default=300)
 # Directory for the figures. Default: runs/model_comparison
 parser.add_argument("--output_dir", type=str, default=None)
 args = parser.parse_args()
+
+
+def perParameter(values, name):
+    """Expand a one- or five-valued option to one value per parameter."""
+    if len(values) == 1:
+        return list(values) * 5
+    if len(values) == 5:
+        return list(values)
+    parser.error("--{} takes 1 or 5 values, got {}".format(name, len(values)))
+
+
+BINS = perParameter(args.bins, "bins")
+HALF_RANGES = (
+    perParameter(args.half_range, "half_range")
+    if args.half_range is not None
+    else [0.0] * 5
+)
 
 MODEL_PATHS = {
     mode: os.path.abspath(os.path.expanduser(getattr(args, "{}_model".format(mode))))
@@ -105,6 +136,7 @@ for mode, path in MODEL_PATHS.items():
         parser.error("--{}_model: file {} not found".format(mode, path))
 
 PARTICLE = args.particle
+SCALER_PARTICLE = args.scaler_particle or PARTICLE
 SIMULATION = "geant4"
 DATA_PREFIX = "mega"
 ACTS_DIR = co.ACTS_DIR
@@ -136,7 +168,11 @@ def testDataDir(vertex_data):
 
 def scalerPaths(mode):
     """Same scaler paths as in the training script for the given mode."""
-    prefix = DATA_PREFIX if PARTICLE == "electron" else DATA_PREFIX + "_" + PARTICLE
+    prefix = (
+        DATA_PREFIX
+        if SCALER_PARTICLE == "electron"
+        else DATA_PREFIX + "_" + SCALER_PARTICLE
+    )
     if mode == "wide":
         prefix += "_wide"
     output_ending = (
@@ -293,12 +329,16 @@ def comparisonHistograms(residuals_by_mode, title, fig_path, kf_residuals=None):
         series.append((kf_residuals, KF_LABEL, dict(color=KF_COLOR, linestyle="--")))
     for i, ax in enumerate(axes):
         # Common symmetric range for all models and the Kalman filter
-        half = 1.2 * max(
-            np.quantile(np.abs(res[np.isfinite(res[:, i]), i]), args.range_quantile)
-            for res, _, _ in series
-        )
-        half = half if half > 0 else 1e-6
-        bin_edges = np.linspace(-half, half, args.bins + 1)
+        if HALF_RANGES[i] > 0:
+            half = HALF_RANGES[i]
+        else:
+            half = 1.2 * max(
+                np.quantile(np.abs(res[np.isfinite(res[:, i]), i]), args.range_quantile)
+                for res, _, _ in series
+            )
+            half = half if half > 0 else 1e-6
+        bin_edges = np.linspace(-half, half, BINS[i] + 1)
+        # for residuals, label, style in [series[1], series[3]]:
         for residuals, label, style in series:
             res = residuals[:, i]
             res = res[np.isfinite(res)]
@@ -320,10 +360,16 @@ def comparisonHistograms(residuals_by_mode, title, fig_path, kf_residuals=None):
             ax.set_yscale("log")
         ax.grid(True)
         ax.legend(fontsize=7)
+    axes[0].set_xlim(-0.12, 0.12)
+    # axes[0].set_xlim(-0.06, 0.06)
+    axes[1].set_xlim(-20, 20)
+    # axes[2].set_xlim(-0.2, 0.2)
+    axes[3].set_xlim(-0.1, 0.1)
+    axes[4].set_xlim(-0.03, 0.03)
     fig.suptitle(title)
     plt.tight_layout()
     os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-    plt.savefig(fig_path)
+    plt.savefig(fig_path, dpi=args.dpi)
     print("Saved comparison figure to", fig_path)
     if args.show:
         plt.show()
@@ -348,8 +394,15 @@ def main():
         )
         fig_path = os.path.join(
             COMPARISON_DIR,
-            "residual_comparison_{}_{}_test_{}.png".format(
-                PARTICLE, "_".join(MODEL_PATHS), vertex_data
+            "residual_comparison_{}{}_{}_test_{}.png".format(
+                PARTICLE,
+                (
+                    ""
+                    if SCALER_PARTICLE == PARTICLE
+                    else "_{}_scalers".format(SCALER_PARTICLE)
+                ),
+                "_".join(MODEL_PATHS),
+                vertex_data,
             ),
         )
         comparisonHistograms(
